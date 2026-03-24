@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>ANTI//GRAV</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><polygon points='16,3 29,16 16,29 3,16' fill='%23ff00c8'/><polygon points='16,9 23,16 16,23 9,16' fill='%230a0a0f'/></svg>">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -60,7 +61,7 @@
     function init() {
       score      = 0;
       frame      = 0;
-      speed      = 3;
+      speed      = 2.2;
       gridOffset = 0;
       player = { x: 90, y: H / 2, vy: 0, gravDir: 1, w: 16, h: 16, trail: [] };
       walls  = [];
@@ -70,8 +71,8 @@
 
     // ── Wall spawning ─────────────────────────────────────────────────────────
     const WALL_W   = 28;
-    const GAP_MIN  = 130;
-    const GAP_MAX  = 170;
+    const GAP_MIN  = 165;
+    const GAP_MAX  = 210;
 
     function spawnWall() {
       const gap  = GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN);
@@ -112,7 +113,7 @@
     function update() {
       if (mode !== 'play') return;
       frame++;
-      speed = 3 + frame * 0.0008;
+      speed = 2.2 + frame * 0.0006;
       gridOffset = (gridOffset + speed) % 60;
 
       // Player physics
