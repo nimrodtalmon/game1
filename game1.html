@@ -2,10 +2,305 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>game1 — elektronaj playground</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>game1 — gravity flip</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+    #back {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      color: #00ff9f55;
+      font-size: 0.75rem;
+      text-decoration: none;
+      letter-spacing: 0.15em;
+      font-family: monospace;
+      z-index: 10;
+    }
+    #back:hover { color: #00ff9f; }
+  </style>
 </head>
 <body>
-  <p>hello game1</p>
+  <a href="index.html" id="back">← back</a>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    const W = 400, H = 600;
+    const GREEN = '#00ff9f';
+    const PINK  = '#ff00c8';
+    const BG    = '#0a0a0f';
+
+    function resize() {
+      const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+      canvas.width  = W;
+      canvas.height = H;
+      canvas.style.width  = W * s + 'px';
+      canvas.style.height = H * s + 'px';
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let mode = 'start'; // 'start' | 'play' | 'dead'
+    let score, best = 0, frame, speed;
+    let player, walls, particles, gridOffset;
+
+    function init() {
+      score      = 0;
+      frame      = 0;
+      speed      = 3;
+      gridOffset = 0;
+      player = { x: 90, y: H / 2, vy: 0, gravDir: 1, w: 16, h: 16, trail: [] };
+      walls  = [];
+      particles = [];
+      spawnWall();
+    }
+
+    // ── Wall spawning ─────────────────────────────────────────────────────────
+    const WALL_W   = 28;
+    const GAP_MIN  = 130;
+    const GAP_MAX  = 170;
+
+    function spawnWall() {
+      const gap  = GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN);
+      const gapY = 50 + Math.random() * (H - 100 - gap);
+      walls.push({ x: W + WALL_W, gapY, gap, scored: false });
+    }
+
+    // ── Particles ─────────────────────────────────────────────────────────────
+    function burst(x, y, color) {
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const v = 1.5 + Math.random() * 3;
+        particles.push({ x, y, vx: Math.cos(a)*v, vy: Math.sin(a)*v,
+                         life: 1, color });
+      }
+    }
+
+    // ── Input ─────────────────────────────────────────────────────────────────
+    function action() {
+      if (mode === 'start') { mode = 'play'; init(); return; }
+      if (mode === 'dead')  { mode = 'play'; init(); return; }
+      player.gravDir *= -1;
+      player.vy = 0;
+      burst(player.x, player.y, PINK);
+    }
+    document.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); action(); } });
+    canvas.addEventListener('pointerdown', e => { e.preventDefault(); action(); });
+
+    // ── Collision ─────────────────────────────────────────────────────────────
+    function hits(p, w) {
+      const L = p.x - p.w/2, R = p.x + p.w/2;
+      const T = p.y - p.h/2, B = p.y + p.h/2;
+      if (R < w.x || L > w.x + WALL_W) return false;
+      return T < w.gapY || B > w.gapY + w.gap;
+    }
+
+    // ── Update ────────────────────────────────────────────────────────────────
+    function update() {
+      if (mode !== 'play') return;
+      frame++;
+      speed = 3 + frame * 0.0008;
+      gridOffset = (gridOffset + speed) % 60;
+
+      // Player physics
+      player.vy += 0.38 * player.gravDir;
+      player.vy  = Math.max(-9, Math.min(9, player.vy));
+      player.y  += player.vy;
+
+      // Trail
+      player.trail.push({ x: player.x, y: player.y });
+      if (player.trail.length > 10) player.trail.shift();
+
+      // Boundary
+      if (player.y - player.h/2 < 0 || player.y + player.h/2 > H) { die(); return; }
+
+      // Walls
+      if (walls.length === 0 || walls[walls.length-1].x < W - 180) spawnWall();
+      for (const w of walls) {
+        w.x -= speed;
+        if (!w.scored && w.x + WALL_W < player.x - player.w/2) {
+          w.scored = true;
+          score++;
+          burst(player.x, player.y, GREEN);
+        }
+        if (hits(player, w)) { die(); return; }
+      }
+      walls = walls.filter(w => w.x + WALL_W > -10);
+
+      // Particles
+      for (const p of particles) {
+        p.x += p.vx; p.y += p.vy;
+        p.vx *= 0.92; p.vy *= 0.92;
+        p.life -= 0.045;
+      }
+      particles = particles.filter(p => p.life > 0);
+    }
+
+    function die() {
+      mode = 'dead';
+      burst(player.x, player.y, PINK);
+      burst(player.x, player.y, GREEN);
+      if (score > best) best = score;
+    }
+
+    // ── Draw helpers ──────────────────────────────────────────────────────────
+    function glow(color, blur, fn) {
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = blur;
+      fn();
+      ctx.restore();
+    }
+
+    function text(str, x, y, color, size, align = 'center') {
+      ctx.fillStyle  = color;
+      ctx.font       = `${size}px monospace`;
+      ctx.textAlign  = align;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(str, x, y);
+    }
+
+    // ── Draw ──────────────────────────────────────────────────────────────────
+    function draw() {
+      // Background
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, W, H);
+
+      // Moving grid
+      ctx.strokeStyle = '#00ff9f0a';
+      ctx.lineWidth = 1;
+      for (let x = (W - gridOffset % 60); x > -60; x -= 60) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+      for (let y = 0; y < H; y += 60) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+
+      // Scanlines
+      for (let y = 0; y < H; y += 4) {
+        ctx.fillStyle = 'rgba(0,0,0,0.10)';
+        ctx.fillRect(0, y, W, 1);
+      }
+
+      if (mode === 'start') { drawOverlay(); return; }
+
+      // Walls
+      for (const w of walls) {
+        glow(GREEN, 14, () => {
+          ctx.fillStyle = '#003322';
+          ctx.fillRect(w.x, 0, WALL_W, w.gapY);
+          ctx.fillRect(w.x, w.gapY + w.gap, WALL_W, H - w.gapY - w.gap);
+          ctx.fillStyle = GREEN;
+          ctx.fillRect(w.x, 0, 2, w.gapY);
+          ctx.fillRect(w.x + WALL_W - 2, 0, 2, w.gapY);
+          ctx.fillRect(w.x, w.gapY + w.gap, WALL_W, 2);
+          ctx.fillRect(w.x, w.gapY - 2, WALL_W, 2);
+          ctx.fillRect(w.x, w.gapY + w.gap + (H - w.gapY - w.gap) - 2, WALL_W, 2);
+          ctx.fillRect(w.x, 0, WALL_W, 2);
+        });
+        // Pink gap edge accent
+        glow(PINK, 8, () => {
+          ctx.fillStyle = PINK;
+          ctx.fillRect(w.x, w.gapY - 2, WALL_W, 2);
+          ctx.fillRect(w.x, w.gapY + w.gap, WALL_W, 2);
+        });
+      }
+
+      // Trail
+      for (let i = 0; i < player.trail.length; i++) {
+        const t = player.trail[i];
+        const a = (i / player.trail.length) * 0.4;
+        ctx.fillStyle = `rgba(255,0,200,${a})`;
+        const s = (i / player.trail.length) * player.w * 0.6;
+        ctx.fillRect(t.x - s/2, t.y - s/2, s, s);
+      }
+
+      // Player (diamond)
+      glow(PINK, 20, () => {
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.rotate(player.vy * 0.07);
+        ctx.fillStyle = PINK;
+        ctx.beginPath();
+        ctx.moveTo(0, -player.h/2);
+        ctx.lineTo(player.w/2, 0);
+        ctx.lineTo(0,  player.h/2);
+        ctx.lineTo(-player.w/2, 0);
+        ctx.closePath();
+        ctx.fill();
+        // white core
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(0, -4); ctx.lineTo(4, 0); ctx.lineTo(0, 4); ctx.lineTo(-4, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+
+      // Particles
+      for (const p of particles) {
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+
+      // Score
+      glow(GREEN, 10, () => {
+        text(String(score).padStart(4, '0'), 20, 28, GREEN, 22, 'left');
+      });
+      if (best > 0) {
+        text('best ' + best, W - 16, 28, '#00ff9f55', 14, 'right');
+      }
+
+      // Gravity indicator
+      const arrow = player.gravDir === 1 ? '▼' : '▲';
+      text(arrow, W/2, 24, '#ff00c888', 16);
+
+      if (mode === 'dead') drawOverlay();
+    }
+
+    function drawOverlay() {
+      ctx.fillStyle = 'rgba(10,10,15,0.6)';
+      ctx.fillRect(0, 0, W, H);
+
+      if (mode === 'start') {
+        glow(GREEN, 20, () => text('gravity flip', W/2, H/2 - 60, GREEN, 30));
+        text('tap to flip gravity', W/2, H/2, '#ffffff99', 14);
+        text('survive the walls', W/2, H/2 + 26, '#ffffff44', 12);
+        glow(PINK, 10, () => text('[ tap to start ]', W/2, H/2 + 70, PINK, 14));
+      }
+
+      if (mode === 'dead') {
+        glow(PINK, 20, () => text('// dead //', W/2, H/2 - 60, PINK, 26));
+        text('score  ' + score, W/2, H/2 - 10, GREEN, 18);
+        text('best   ' + best,  W/2, H/2 + 18, '#00ff9f88', 16);
+        glow(GREEN, 10, () => text('[ tap to retry ]', W/2, H/2 + 66, GREEN, 14));
+      }
+    }
+
+    // ── Loop ─────────────────────────────────────────────────────────────────
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    init();
+    loop();
+  </script>
 </body>
 </html>
