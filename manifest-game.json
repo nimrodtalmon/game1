@@ -1,7 +1,8 @@
 {
   "name": "ANTI//GRAV",
   "short_name": "ANTI//GRAV",
-  "start_url": "./game1.html",
+  "start_url": "https://nimrodtalmon.github.io/game1/game1.html",
+  "scope": "https://nimrodtalmon.github.io/game1/",
   "display": "fullscreen",
   "background_color": "#0a0a0f",
   "theme_color": "#ff00c8",

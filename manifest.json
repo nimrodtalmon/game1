@@ -1,7 +1,8 @@
 {
   "name": "elektronaj playground",
   "short_name": "elektronaj",
-  "start_url": "./index.html",
+  "start_url": "https://nimrodtalmon.github.io/game1/index.html",
+  "scope": "https://nimrodtalmon.github.io/game1/",
   "display": "standalone",
   "background_color": "#0a0a0f",
   "theme_color": "#00ff9f",
