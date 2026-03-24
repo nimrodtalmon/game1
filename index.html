@@ -3,9 +3,131 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Landing Page</title>
+  <title>elektronaj playground</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      color: #00ff9f;
+      font-family: 'Share Tech Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .scanlines {
+      pointer-events: none;
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 3px,
+        rgba(0,0,0,0.15) 3px,
+        rgba(0,0,0,0.15) 4px
+      );
+      z-index: 10;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+
+    h1 {
+      font-size: clamp(1.8rem, 5vw, 3rem);
+      letter-spacing: 0.15em;
+      text-transform: lowercase;
+      color: #00ff9f;
+      text-shadow: 0 0 8px #00ff9f88, 0 0 30px #00ff9f44;
+    }
+
+    .subtitle {
+      margin-top: 0.5rem;
+      font-size: 0.75rem;
+      color: #ff00c8;
+      letter-spacing: 0.3em;
+      text-shadow: 0 0 6px #ff00c888;
+    }
+
+    .divider {
+      width: 100%;
+      max-width: 480px;
+      border: none;
+      border-top: 1px solid #00ff9f33;
+      margin: 0 auto 2.5rem;
+    }
+
+    .app-list {
+      list-style: none;
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .app-list li a {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.9rem 1.2rem;
+      border: 1px solid #00ff9f44;
+      text-decoration: none;
+      color: #00ff9f;
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      transition: border-color 0.2s, background 0.2s, color 0.2s;
+      position: relative;
+    }
+
+    .app-list li a::before {
+      content: '▶';
+      font-size: 0.6rem;
+      color: #ff00c8;
+      text-shadow: 0 0 6px #ff00c8;
+      transition: transform 0.2s;
+    }
+
+    .app-list li a:hover {
+      background: #00ff9f0d;
+      border-color: #00ff9f;
+      color: #fff;
+      text-shadow: 0 0 6px #00ff9f88;
+    }
+
+    .app-list li a:hover::before {
+      transform: translateX(4px);
+    }
+
+    footer {
+      margin-top: 3rem;
+      font-size: 0.65rem;
+      color: #ffffff22;
+      letter-spacing: 0.2em;
+    }
+  </style>
 </head>
 <body>
-  <h1>Hi, this is me!!!</h1>
+  <div class="scanlines"></div>
+
+  <header>
+    <h1>elektronaj playground</h1>
+    <p class="subtitle">// works in progress //</p>
+  </header>
+
+  <hr class="divider">
+
+  <ul class="app-list">
+    <li><a href="game1.html">game1</a></li>
+  </ul>
+
+  <footer>init sequence complete_</footer>
 </body>
 </html>
