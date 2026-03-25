@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>BLOCK//DROP</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><rect x='4' y='8' width='24' height='6' fill='%2300ff9f'/><rect x='4' y='16' width='18' height='6' fill='%23ff00c8'/><rect x='4' y='24' width='12' height='4' fill='%2300ff9f' opacity='0.5'/></svg>">
+  <link rel="manifest" href="manifest-game3.json">
+  <link rel="apple-touch-icon" href="icon-game3.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="BLOCK//DROP">
+  <meta name="theme-color" content="#0a0a0f">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+    #back {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      color: #00ff9f55;
+      font-size: 0.75rem;
+      text-decoration: none;
+      letter-spacing: 0.15em;
+      font-family: monospace;
+      z-index: 10;
+    }
+    #back:hover { color: #00ff9f; }
+  </style>
+</head>
+<body>
+  <a href="index.html" id="back">← back</a>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    const COLS = 10, ROWS = 20, CELL = 24;
+    const BX = 20, BY = 30;          // board origin on canvas
+    const W = 400, H = BY + ROWS * CELL + 10;  // 400 x 520
+
+    const GREEN = '#00ff9f';
+    const PINK  = '#ff00c8';
+    const BG    = '#0a0a0f';
+
+    const PIECES = [
+      { shape: [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]], color: '#00ff9f' }, // I
+      { shape: [[1,1],[1,1]],                              color: '#ff00c8' }, // O
+      { shape: [[0,1,0],[1,1,1],[0,0,0]],                  color: '#bf00ff' }, // T
+      { shape: [[0,1,1],[1,1,0],[0,0,0]],                  color: '#00cfff' }, // S
+      { shape: [[1,1,0],[0,1,1],[0,0,0]],                  color: '#ff4400' }, // Z
+      { shape: [[1,0,0],[1,1,1],[0,0,0]],                  color: '#4488ff' }, // J
+      { shape: [[0,0,1],[1,1,1],[0,0,0]],                  color: '#ffaa00' }, // L
+    ];
+
+    const SCORE_TABLE = [0, 100, 300, 500, 800];
+    const DROP_SPEEDS = [800, 700, 580, 470, 370, 280, 220, 170, 130, 100];
+
+    function resize() {
+      const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+      canvas.width  = W;
+      canvas.height = H;
+      canvas.style.width  = W * s + 'px';
+      canvas.style.height = H * s + 'px';
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let mode = 'start'; // 'start' | 'play' | 'dead'
+    let board, piece, nextPiece, score, best, level, lines;
+    let dropTimer, particles, flashRows, flashTimer, pendingClear;
+
+    best = parseInt(localStorage.getItem('blockdrop_best') || '0');
+
+    function makePiece() {
+      const p = PIECES[Math.floor(Math.random() * PIECES.length)];
+      return { shape: p.shape.map(r => [...r]), color: p.color, x: 0, y: 0 };
+    }
+
+    function centerPiece(p) {
+      p.x = Math.floor((COLS - p.shape[0].length) / 2);
+      p.y = 0;
+      return p;
+    }
+
+    function init() {
+      board        = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+      score        = 0;
+      level        = 1;
+      lines        = 0;
+      dropTimer    = 0;
+      particles    = [];
+      flashRows    = [];
+      flashTimer   = 0;
+      pendingClear = null;
+      piece        = centerPiece(makePiece());
+      nextPiece    = makePiece();
+    }
+
+    // ── Rotation ──────────────────────────────────────────────────────────────
+    function rotate(shape) {
+      const rows = shape.length, cols = shape[0].length;
+      const out = Array.from({ length: cols }, () => Array(rows).fill(0));
+      for (let r = 0; r < rows; r++)
+        for (let c = 0; c < cols; c++)
+          out[c][rows - 1 - r] = shape[r][c];
+      return out;
+    }
+
+    function valid(shape, x, y) {
+      for (let r = 0; r < shape.length; r++)
+        for (let c = 0; c < shape[r].length; c++) {
+          if (!shape[r][c]) continue;
+          const nx = x + c, ny = y + r;
+          if (nx < 0 || nx >= COLS || ny >= ROWS) return false;
+          if (ny >= 0 && board[ny][nx]) return false;
+        }
+      return true;
+    }
+
+    function tryRotate() {
+      const rot = rotate(piece.shape);
+      for (const kick of [0, -1, 1, -2, 2]) {
+        if (valid(rot, piece.x + kick, piece.y)) {
+          piece.shape = rot;
+          piece.x += kick;
+          return;
+        }
+      }
+    }
+
+    function ghostY() {
+      let gy = piece.y;
+      while (valid(piece.shape, piece.x, gy + 1)) gy++;
+      return gy;
+    }
+
+    function hardDrop() {
+      piece.y = ghostY();
+      lock();
+    }
+
+    // ── Locking & line clears ─────────────────────────────────────────────────
+    function lock() {
+      for (let r = 0; r < piece.shape.length; r++)
+        for (let c = 0; c < piece.shape[r].length; c++)
+          if (piece.shape[r][c]) {
+            if (piece.y + r < 0) { endGame(); return; }
+            board[piece.y + r][piece.x + c] = piece.color;
+          }
+
+      const full = [];
+      for (let r = 0; r < ROWS; r++)
+        if (board[r].every(c => c !== null)) full.push(r);
+
+      if (full.length) {
+        for (const row of full)
+          for (let c = 0; c < COLS; c++)
+            burst(BX + (c + 0.5) * CELL, BY + (row + 0.5) * CELL, board[row][c], 3);
+        flashRows    = full;
+        flashTimer   = 200;
+        pendingClear = full;
+      } else {
+        spawnNext();
+      }
+    }
+
+    function clearLines() {
+      const full = pendingClear;
+      pendingClear = null;
+      flashRows    = [];
+      const newBoard = board.filter((_, i) => !full.includes(i));
+      while (newBoard.length < ROWS) newBoard.unshift(Array(COLS).fill(null));
+      board = newBoard;
+
+      lines += full.length;
+      score += SCORE_TABLE[full.length] * level;
+      level  = Math.min(10, Math.floor(lines / 10) + 1);
+      if (score > best) { best = score; localStorage.setItem('blockdrop_best', best); }
+      spawnNext();
+    }
+
+    function spawnNext() {
+      piece     = centerPiece(nextPiece);
+      nextPiece = makePiece();
+      if (!valid(piece.shape, piece.x, piece.y)) endGame();
+    }
+
+    function endGame() {
+      mode = 'dead';
+      if (score > best) { best = score; localStorage.setItem('blockdrop_best', best); }
+      for (let i = 0; i < 40; i++) {
+        burst(
+          BX + CELL * (1 + Math.random() * 8),
+          BY + CELL * (6 + Math.random() * 8),
+          Math.random() > 0.5 ? PINK : GREEN, 1
+        );
+      }
+    }
+
+    // ── Particles ─────────────────────────────────────────────────────────────
+    function burst(cx, cy, color, n = 8) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const v = 1 + Math.random() * 3;
+        particles.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, color });
+      }
+    }
+
+    // ── Input ─────────────────────────────────────────────────────────────────
+    document.addEventListener('keydown', e => {
+      if (mode === 'start' || mode === 'dead') { mode = 'play'; init(); return; }
+      if (mode !== 'play' || flashRows.length) return;
+      if (e.code === 'ArrowLeft')              { if (valid(piece.shape, piece.x - 1, piece.y)) piece.x--;  e.preventDefault(); }
+      else if (e.code === 'ArrowRight')        { if (valid(piece.shape, piece.x + 1, piece.y)) piece.x++;  e.preventDefault(); }
+      else if (e.code === 'ArrowDown')         { if (valid(piece.shape, piece.x, piece.y + 1)) piece.y++; else lock(); dropTimer = 0; e.preventDefault(); }
+      else if (e.code === 'ArrowUp' || e.code === 'KeyX') { tryRotate(); e.preventDefault(); }
+      else if (e.code === 'Space')             { hardDrop(); e.preventDefault(); }
+    });
+
+    // Touch
+    let touchStart = null;
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      if (mode === 'start' || mode === 'dead') { mode = 'play'; init(); return; }
+      if (!touchStart || flashRows.length) return;
+      const dx = e.changedTouches[0].clientX - touchStart.x;
+      const dy = e.changedTouches[0].clientY - touchStart.y;
+      touchStart = null;
+
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+        tryRotate();
+      } else if (Math.abs(dx) > Math.abs(dy)) {
+        const steps = Math.max(1, Math.round(Math.abs(dx) / 28));
+        for (let i = 0; i < steps; i++) {
+          const nx = piece.x + (dx > 0 ? 1 : -1);
+          if (valid(piece.shape, nx, piece.y)) piece.x = nx; else break;
+        }
+      } else if (dy > 20) {
+        hardDrop();
+      }
+    }, { passive: false });
+
+    // ── Update ────────────────────────────────────────────────────────────────
+    let last = 0;
+    function update(ts) {
+      const dt = last ? Math.min(ts - last, 100) : 0;
+      last = ts;
+      if (mode !== 'play') return;
+
+      // Particles
+      for (const p of particles) {
+        p.x  += p.vx; p.y  += p.vy;
+        p.vx *= 0.88; p.vy  = p.vy * 0.88 + 0.12;
+        p.life -= 0.03;
+      }
+      particles = particles.filter(p => p.life > 0);
+
+      // Line-clear flash pause
+      if (flashRows.length) {
+        flashTimer -= dt;
+        if (flashTimer <= 0) clearLines();
+        return;
+      }
+
+      // Gravity
+      dropTimer += dt;
+      const speed = DROP_SPEEDS[level - 1] ?? 100;
+      if (dropTimer >= speed) {
+        dropTimer -= speed;
+        if (valid(piece.shape, piece.x, piece.y + 1)) piece.y++;
+        else lock();
+      }
+    }
+
+    // ── Draw helpers ──────────────────────────────────────────────────────────
+    function glow(color, blur, fn) {
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = blur;
+      fn();
+      ctx.restore();
+    }
+
+    function text(str, x, y, color, size, align = 'center') {
+      ctx.fillStyle    = color;
+      ctx.font         = `${size}px monospace`;
+      ctx.textAlign    = align;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(str, x, y);
+    }
+
+    function drawCell(bx, by, color, alpha = 1) {
+      const px = BX + bx * CELL + 1, py = BY + by * CELL + 1;
+      const sz = CELL - 2;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle   = color;
+      ctx.fillRect(px, py, sz, sz);
+      ctx.fillStyle = 'rgba(255,255,255,0.2)';
+      ctx.fillRect(px, py, sz, 2);
+      ctx.fillRect(px, py, 2, sz);
+      ctx.globalAlpha = 1;
+    }
+
+    // ── Draw ──────────────────────────────────────────────────────────────────
+    function draw() {
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, W, H);
+
+      // Scanlines
+      for (let y = 0; y < H; y += 4) {
+        ctx.fillStyle = 'rgba(0,0,0,0.07)';
+        ctx.fillRect(0, y, W, 1);
+      }
+
+      if (mode === 'start') { drawOverlay(); return; }
+
+      // Board border
+      ctx.strokeStyle = '#00ff9f33';
+      ctx.lineWidth   = 1;
+      ctx.strokeRect(BX - 1, BY - 1, COLS * CELL + 2, ROWS * CELL + 2);
+
+      // Grid
+      ctx.strokeStyle = '#00ff9f07';
+      for (let c = 1; c < COLS; c++) {
+        ctx.beginPath(); ctx.moveTo(BX + c * CELL, BY); ctx.lineTo(BX + c * CELL, BY + ROWS * CELL); ctx.stroke();
+      }
+      for (let r = 1; r < ROWS; r++) {
+        ctx.beginPath(); ctx.moveTo(BX, BY + r * CELL); ctx.lineTo(BX + COLS * CELL, BY + r * CELL); ctx.stroke();
+      }
+
+      // Locked cells
+      for (let r = 0; r < ROWS; r++) {
+        const flashing = flashRows.includes(r);
+        for (let c = 0; c < COLS; c++) {
+          if (!board[r][c]) continue;
+          if (flashing) {
+            const fl = flashTimer / 200;
+            glow('#ffffff', 14, () => drawCell(c, r, '#ffffff', fl));
+          } else {
+            drawCell(c, r, board[r][c]);
+          }
+        }
+      }
+
+      // Ghost
+      const gy = ghostY();
+      if (gy > piece.y && !flashRows.length) {
+        for (let r = 0; r < piece.shape.length; r++)
+          for (let c = 0; c < piece.shape[r].length; c++)
+            if (piece.shape[r][c]) {
+              ctx.strokeStyle = piece.color + '40';
+              ctx.lineWidth   = 1;
+              ctx.strokeRect(BX + (piece.x + c) * CELL + 1, BY + (gy + r) * CELL + 1, CELL - 2, CELL - 2);
+            }
+      }
+
+      // Active piece
+      if (!flashRows.length) {
+        glow(piece.color, 12, () => {
+          for (let r = 0; r < piece.shape.length; r++)
+            for (let c = 0; c < piece.shape[r].length; c++)
+              if (piece.shape[r][c]) drawCell(piece.x + c, piece.y + r, piece.color);
+        });
+      }
+
+      // Particles
+      for (const p of particles) {
+        ctx.globalAlpha  = p.life;
+        ctx.fillStyle    = p.color;
+        ctx.shadowColor  = p.color;
+        ctx.shadowBlur   = 8;
+        ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur  = 0;
+
+      // ── Sidebar ──────────────────────────────────────────────────────────
+      const SX = BX + COLS * CELL + 14;  // ~274
+      const CX = SX + 46;                 // center of sidebar text
+
+      text('score', CX, BY + 6,  '#00ff9f55', 9);
+      glow(GREEN, 8, () => text(String(score).padStart(6, '0'), CX, BY + 20, GREEN, 13));
+
+      text('lines', CX, BY + 44, '#00ff9f55', 9);
+      text(String(lines), CX, BY + 58, GREEN, 13);
+
+      text('level', CX, BY + 82, '#00ff9f55', 9);
+      glow(PINK, 8, () => text(String(level), CX, BY + 96, PINK, 16));
+
+      text('next', CX, BY + 122, '#00ff9f55', 9);
+      const PC = 13; // preview cell size
+      const ns = nextPiece.shape;
+      const ox = CX - (ns[0].length * PC) / 2;
+      const oy = BY + 134;
+      glow(nextPiece.color, 8, () => {
+        ctx.fillStyle = nextPiece.color;
+        for (let r = 0; r < ns.length; r++)
+          for (let c = 0; c < ns[r].length; c++)
+            if (ns[r][c]) ctx.fillRect(ox + c * PC + 1, oy + r * PC + 1, PC - 2, PC - 2);
+      });
+
+      if (best > 0) {
+        text('best',     CX, BY + 200, '#00ff9f33', 9);
+        text(String(best), CX, BY + 213, '#00ff9f55', 11);
+      }
+
+      if (mode === 'dead') drawOverlay();
+    }
+
+    function drawOverlay() {
+      ctx.fillStyle = 'rgba(10,10,15,0.78)';
+      ctx.fillRect(0, 0, W, H);
+
+      if (mode === 'start') {
+        glow(GREEN, 22, () => text('BLOCK//DROP', W / 2, H / 2 - 72, GREEN, 28));
+        text('← →  move         ↑  rotate', W / 2, H / 2 - 14, '#ffffff77', 11);
+        text('↓  soft drop    space  hard drop', W / 2, H / 2 + 10, '#ffffff55', 11);
+        text('tap = rotate   swipe = move / drop', W / 2, H / 2 + 32, '#ffffff33', 10);
+        glow(PINK, 12, () => text('[ tap to start ]', W / 2, H / 2 + 72, PINK, 14));
+        if (best > 0) text('best  ' + best, W / 2, H / 2 + 102, '#00ff9f44', 12);
+      }
+
+      if (mode === 'dead') {
+        glow(PINK, 22, () => text('// game over //', W / 2, H / 2 - 60, PINK, 24));
+        text('score  ' + score, W / 2, H / 2 - 10, GREEN, 18);
+        text('best   ' + best,  W / 2, H / 2 + 18, '#00ff9f77', 16);
+        glow(GREEN, 12, () => text('[ tap to retry ]', W / 2, H / 2 + 66, GREEN, 14));
+      }
+    }
+
+    // ── Loop ─────────────────────────────────────────────────────────────────
+    function loop(ts) {
+      update(ts);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    init();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
