@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0a0a0f"/>
+  <!-- Hill -->
+  <polygon points="256,80 480,440 32,440" fill="#001a0a" stroke="#00ff9f" stroke-width="8"/>
+  <!-- Player figure at peak -->
+  <circle cx="256" cy="66" r="14" fill="none" stroke="#00ff9f" stroke-width="6"/>
+  <line x1="256" y1="80" x2="256" y2="118" stroke="#00ff9f" stroke-width="6" stroke-linecap="round"/>
+  <line x1="256" y1="90" x2="230" y2="106" stroke="#00ff9f" stroke-width="6" stroke-linecap="round"/>
+  <line x1="256" y1="90" x2="282" y2="106" stroke="#ff00c8" stroke-width="6" stroke-linecap="round"/>
+  <!-- Enemy on left slope -->
+  <polygon points="148,310 118,280 118,340" fill="#00ff9f" opacity="0.8"/>
+  <!-- Enemy on right slope -->
+  <polygon points="364,310 394,280 394,340" fill="#ff00c8" opacity="0.8"/>
+</svg>

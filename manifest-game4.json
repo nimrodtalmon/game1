@@ -1,0 +1,10 @@
+{
+  "name": "PEAK//HOLD",
+  "short_name": "PEAK//HOLD",
+  "start_url": "https://nimrodtalmon.github.io/game1/game4.html",
+  "scope": "https://nimrodtalmon.github.io/game1/",
+  "display": "fullscreen",
+  "background_color": "#0a0a0f",
+  "theme_color": "#00ff9f",
+  "icons": [{ "src": "icon-game4.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
