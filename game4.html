@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>PEAK//HOLD</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><polygon points='16,4 28,28 4,28' fill='none' stroke='%2300ff9f' stroke-width='2'/><circle cx='16' cy='9' r='2' fill='%23ff00c8'/></svg>">
+  <link rel="manifest" href="manifest-game4.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="PEAK//HOLD">
+  <meta name="theme-color" content="#0a0a0f">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+    canvas { display: block; touch-action: none; }
+    #back { position: fixed; top: 1rem; left: 1rem; color: #00ff9f55; font-size: 0.75rem; text-decoration: none; letter-spacing: 0.15em; font-family: monospace; z-index: 10; }
+    #back:hover { color: #00ff9f; }
+  </style>
+</head>
+<body>
+  <a href="index.html" id="back">← back</a>
+  <canvas id="c"></canvas>
+  <script>
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
+
+  const W = 400, H = 600;
+  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff', BG = '#0a0a0f';
+
+  let scale = 1;
+  function resize() {
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    canvas.width  = W;
+    canvas.height = H;
+    canvas.style.width  = W * scale + 'px';
+    canvas.style.height = H * scale + 'px';
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // ── Hill geometry ────────────────────────────────────────────────────────────
+  const PEAK_X = 200, PEAK_Y = 120;
+  const LBX = -30, LBY = 545;
+  const RBX = 430, RBY = 545;
+
+  // Angle of each slope (direction from base toward peak)
+  const L_ANG = Math.atan2(PEAK_Y - LBY, PEAK_X - LBX);
+  const R_ANG = Math.atan2(PEAK_Y - RBY, PEAK_X - RBX);
+
+  function slopePos(side, t) {
+    return side === 'L'
+      ? { x: LBX + t * (PEAK_X - LBX), y: LBY + t * (PEAK_Y - LBY) }
+      : { x: RBX + t * (PEAK_X - RBX), y: RBY + t * (PEAK_Y - RBY) };
+  }
+
+  // ── Enemy definitions ────────────────────────────────────────────────────────
+  const DEFS = {
+    CRAWLER: { spd: 0.0018, hp: 1, sz: 5,  color: GREEN,     reward: 1 },
+    RUNNER:  { spd: 0.0040, hp: 1, sz: 4,  color: CYAN,      reward: 2 },
+    BRUTE:   { spd: 0.0013, hp: 3, sz: 9,  color: PINK,      reward: 5 },
+    DRONE:   { spd: 0.0030, hp: 1, sz: 3,  color: '#ffee44', reward: 1 },
+  };
+
+  // ── State ────────────────────────────────────────────────────────────────────
+  let mode = 'start';
+  let monsters, particles, stars;
+  let playerHp, score, best, wave, waveActive, waveTimer;
+  let punchCooldown, punchAnim, punchSide, slamCharge, screenFlash;
+  let comboCount, comboTimer;
+  let spawnQueue;
+  let notif;  // { text, timer, color }
+
+  best = +(localStorage.getItem('peakhold_best') || 0);
+
+  // ── Stars ────────────────────────────────────────────────────────────────────
+  const stars_bg = Array.from({ length: 70 }, () => ({
+    x: Math.random() * W,
+    y: Math.random() * (PEAK_Y + 80),
+    r: Math.random() + 0.3,
+    tw: Math.random() * Math.PI * 2,
+  }));
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
+  function init() {
+    mode         = 'play';
+    monsters     = [];
+    particles    = [];
+    playerHp     = 5;
+    score        = 0;
+    wave         = 0;
+    waveActive   = false;
+    waveTimer    = 100;
+    punchCooldown = 0;
+    punchAnim    = 0;
+    punchSide    = 'R';
+    slamCharge   = 0;
+    screenFlash  = 0;
+    comboCount   = 0;
+    comboTimer   = 0;
+    spawnQueue   = [];
+    notif        = null;
+  }
+
+  // ── Wave system ──────────────────────────────────────────────────────────────
+  function startWave() {
+    wave++;
+    const n = wave;
+    const count = 4 + n * 2;
+    spawnQueue = [];
+    const sides = ['L', 'R'];
+    for (let i = 0; i < count; i++) {
+      const r = Math.random();
+      let type;
+      if      (n <= 2) type = r < 0.85 ? 'CRAWLER' : 'DRONE';
+      else if (n <= 4) type = r < 0.45 ? 'CRAWLER' : r < 0.80 ? 'DRONE'    : 'RUNNER';
+      else if (n <= 7) type = r < 0.25 ? 'BRUTE'   : r < 0.55 ? 'RUNNER'   : r < 0.80 ? 'CRAWLER' : 'DRONE';
+      else             type = r < 0.35 ? 'BRUTE'   : r < 0.62 ? 'RUNNER'   : 'DRONE';
+      spawnQueue.push({ type, side: sides[i % 2], delay: i * 40 });
+    }
+    waveActive = true;
+    notif = { text: `WAVE ${wave}`, timer: 85, color: PINK };
+  }
+
+  function spawnMonster(type, side) {
+    const d = DEFS[type];
+    monsters.push({
+      type, side,
+      t: 0.01 + Math.random() * 0.04,
+      vt: d.spd,
+      hp: d.hp, maxHp: d.hp,
+      spd: d.spd, sz: d.sz, color: d.color, reward: d.reward,
+      sliding: false, hitFlash: 0, dead: false,
+    });
+  }
+
+  // ── Particles ────────────────────────────────────────────────────────────────
+  function burst(x, y, color, n = 9) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, v = 1.5 + Math.random() * 3.5;
+      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, color });
+    }
+  }
+
+  // ── Input ────────────────────────────────────────────────────────────────────
+  function canvasXY(e) {
+    const r   = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return { x: (src.clientX - r.left) / scale, y: (src.clientY - r.top) / scale };
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (mode !== 'play') { init(); return; }
+    doPunch(canvasXY(e).x < W / 2 ? 'L' : 'R');
+  });
+
+  document.addEventListener('keydown', e => {
+    if (mode !== 'play') { if (['Space', 'Enter'].includes(e.code)) { e.preventDefault(); init(); } return; }
+    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') { e.preventDefault(); doPunch('L'); }
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') { e.preventDefault(); doPunch('R'); }
+  });
+
+  // ── Punch logic ───────────────────────────────────────────────────────────────
+  const PUNCH_RANGE = 0.58;
+  const FRICTION    = 0.872;
+
+  function doPunch(side) {
+    if (punchCooldown > 0) return;
+
+    punchSide = side;
+    punchAnim = 14;
+
+    const isSlam = slamCharge >= 120;
+    const inRange = monsters.filter(m => !m.dead && m.side === side && m.t >= PUNCH_RANGE);
+    inRange.sort((a, b) => b.t - a.t);
+
+    if (isSlam) {
+      screenFlash = 9;
+      burst(PEAK_X, PEAK_Y + 4, PINK, 30);
+      for (const m of inRange) hitMonster(m, 0.17, 2);   // slam: 2 damage, big push
+      punchCooldown = 30;
+    } else {
+      if (inRange.length > 0) hitMonster(inRange[0], 0.05, 1);
+      punchCooldown = 18;
+    }
+    slamCharge = 0;
+  }
+
+  function hitMonster(m, force, dmg) {
+    m.hp     -= dmg;
+    m.hitFlash = 10;
+    const pos = slopePos(m.side, m.t);
+
+    if (m.hp <= 0) {
+      m.dead = true;
+      burst(pos.x, pos.y, m.color, 14);
+      score += m.reward * Math.max(1, Math.ceil(comboCount / 3));
+      comboCount++;
+      comboTimer = 130;
+    } else {
+      // Wounded — push back a little
+      m.vt     = -(force * 0.4);
+      m.sliding = true;
+    }
+  }
+
+  // ── Update ───────────────────────────────────────────────────────────────────
+  function update() {
+    if (mode !== 'play') return;
+
+    // Stars twinkle
+    for (const s of stars_bg) s.tw += 0.017;
+
+    // Particles
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.91; p.vy *= 0.91;
+      p.life -= 0.038;
+    }
+    particles = particles.filter(p => p.life > 0);
+
+    // Timers
+    if (punchCooldown > 0) punchCooldown--;
+    if (punchAnim     > 0) punchAnim--;
+    if (screenFlash   > 0) screenFlash--;
+    slamCharge = Math.min(120, slamCharge + 1);
+    if (comboTimer > 0) { comboTimer--; if (!comboTimer) comboCount = 0; }
+    if (notif) { notif.timer--; if (notif.timer <= 0) notif = null; }
+
+    // Wave management
+    if (!waveActive) {
+      if (waveTimer > 0) waveTimer--;
+      else startWave();
+    } else {
+      // Tick spawn queue
+      for (let i = spawnQueue.length - 1; i >= 0; i--) {
+        if (--spawnQueue[i].delay <= 0) {
+          spawnMonster(spawnQueue[i].type, spawnQueue[i].side);
+          spawnQueue.splice(i, 1);
+        }
+      }
+      // Wave cleared?
+      if (spawnQueue.length === 0 && monsters.filter(m => !m.dead).length === 0) {
+        waveActive = false;
+        waveTimer  = 210;
+        score     += wave * 5;
+        notif = { text: `WAVE ${wave} CLEAR  +${wave * 5}`, timer: 110, color: GREEN };
+        burst(PEAK_X, PEAK_Y, GREEN, 22);
+      }
+    }
+
+    // Monster physics
+    for (const m of monsters) {
+      if (m.dead) continue;
+      if (m.hitFlash > 0) m.hitFlash--;
+
+      if (m.sliding) {
+        m.vt *= FRICTION;
+        if (m.vt > -0.0005) { m.sliding = false; m.vt = m.spd; }
+      } else {
+        m.vt = m.spd;
+      }
+      m.t += m.vt;
+
+      // Reached the top
+      if (m.t >= 0.97) {
+        const pos = slopePos(m.side, 0.95);
+        burst(pos.x, pos.y, PINK, 16);
+        m.dead = true;
+        screenFlash = 6;
+        playerHp--;
+        if (playerHp <= 0) { gameover(); return; }
+        continue;
+      }
+
+      // Fell off the bottom — just remove
+      if (m.t <= 0) { m.dead = true; }
+    }
+
+    // Chain knockbacks: sliding monster bumps into one below it
+    for (const side of ['L', 'R']) {
+      const alive = monsters
+        .filter(m => m.side === side && !m.dead)
+        .sort((a, b) => b.t - a.t);
+      for (let i = 0; i < alive.length - 1; i++) {
+        const hi = alive[i], lo = alive[i + 1];
+        if (hi.t - lo.t < 0.055 && hi.vt < lo.vt - 0.001) {
+          lo.vt     = hi.vt * 0.55;
+          lo.sliding = true;
+          const pos = slopePos(side, lo.t);
+          burst(pos.x, pos.y, lo.color, 5);
+        }
+      }
+    }
+
+    monsters = monsters.filter(m => !m.dead);
+  }
+
+  function gameover() {
+    mode = 'dead';
+    if (score > best) { best = score; localStorage.setItem('peakhold_best', best); }
+    burst(PEAK_X, PEAK_Y, PINK, 35);
+    burst(PEAK_X, PEAK_Y, GREEN, 20);
+  }
+
+  // ── Draw helpers ─────────────────────────────────────────────────────────────
+  function glow(color, blur, fn) {
+    ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; fn(); ctx.restore();
+  }
+  function txt(s, x, y, color, size, align = 'center') {
+    ctx.fillStyle = color; ctx.font = `${size}px monospace`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillText(s, x, y);
+  }
+
+  // ── Draw: hill ───────────────────────────────────────────────────────────────
+  function drawHill() {
+    // Fill
+    ctx.beginPath();
+    ctx.moveTo(PEAK_X, PEAK_Y);
+    ctx.lineTo(LBX, LBY);
+    ctx.lineTo(RBX, RBY);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(PEAK_X, PEAK_Y, PEAK_X, LBY);
+    grad.addColorStop(0, '#002214');
+    grad.addColorStop(1, '#000c07');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Horizontal contour lines
+    for (let t = 0.12; t < 1; t += 0.11) {
+      const lp = slopePos('L', t), rp = slopePos('R', t);
+      ctx.strokeStyle = `rgba(0,255,159,${0.03 + t * 0.055})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(lp.x, lp.y); ctx.lineTo(rp.x, rp.y); ctx.stroke();
+    }
+
+    // Glowing edges
+    glow(GREEN, 14, () => {
+      ctx.strokeStyle = GREEN + 'cc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(PEAK_X, PEAK_Y); ctx.lineTo(LBX, LBY);
+      ctx.moveTo(PEAK_X, PEAK_Y); ctx.lineTo(RBX, RBY);
+      ctx.stroke();
+    });
+
+    // Peak dot
+    glow(GREEN, 24, () => {
+      ctx.fillStyle = GREEN;
+      ctx.beginPath(); ctx.arc(PEAK_X, PEAK_Y, 3, 0, Math.PI * 2); ctx.fill();
+    });
+  }
+
+  // ── Draw: player ─────────────────────────────────────────────────────────────
+  function drawPlayer() {
+    const px = PEAK_X, py = PEAK_Y - 26;
+    const slamReady = slamCharge >= 120;
+    const col = slamReady ? PINK : GREEN;
+    const swing = punchAnim > 0 ? Math.sin((punchAnim / 14) * Math.PI) : 0;
+    const dir   = punchSide === 'L' ? -1 : 1;
+
+    glow(col, slamReady ? 22 : 14, () => {
+      ctx.strokeStyle = col;
+      ctx.lineWidth   = 2;
+      ctx.lineCap     = 'round';
+
+      // Head
+      ctx.beginPath(); ctx.arc(px, py - 9, 5, 0, Math.PI * 2); ctx.stroke();
+
+      // Body
+      ctx.beginPath(); ctx.moveTo(px, py - 4); ctx.lineTo(px, py + 9); ctx.stroke();
+
+      // Legs
+      ctx.beginPath();
+      ctx.moveTo(px, py + 9); ctx.lineTo(px - 5, py + 18);
+      ctx.moveTo(px, py + 9); ctx.lineTo(px + 5, py + 18);
+      ctx.stroke();
+
+      // Arms
+      if (punchAnim > 0) {
+        const reach = 16 * swing;
+        ctx.beginPath();
+        ctx.moveTo(px, py + 1); ctx.lineTo(px + dir * reach, py + 1);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(px, py + 1); ctx.lineTo(px - dir * 6, py + 5);
+        ctx.stroke();
+        // Fist glow on slam
+        if (slamReady || screenFlash > 0) {
+          glow(PINK, 20, () => {
+            ctx.fillStyle = PINK;
+            ctx.beginPath(); ctx.arc(px + dir * reach, py + 1, 4, 0, Math.PI * 2); ctx.fill();
+          });
+        }
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(px, py + 1); ctx.lineTo(px - 7, py + 5);
+        ctx.moveTo(px, py + 1); ctx.lineTo(px + 7, py + 5);
+        ctx.stroke();
+      }
+    });
+
+    // Slam charge arc
+    if (slamCharge > 12) {
+      const ratio = slamCharge / 120;
+      const arcCol = ratio >= 1 ? PINK : GREEN;
+      glow(arcCol, 10, () => {
+        ctx.strokeStyle = arcCol + (ratio >= 1 ? 'ff' : '55');
+        ctx.lineWidth = ratio >= 1 ? 2.5 : 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, 23, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+        ctx.stroke();
+      });
+    }
+
+    // Punch swoosh
+    if (punchAnim > 0) {
+      const a = swing * 0.45;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = slamCharge === 0 && screenFlash > 0 ? PINK : GREEN;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(px, py, 28, dir * 0.1, dir * 0.8 * Math.sign(dir));
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ── Draw: enemies ────────────────────────────────────────────────────────────
+  function drawMonsters() {
+    for (const m of monsters) {
+      if (m.dead) continue;
+      const pos   = slopePos(m.side, m.t);
+      const angle = m.sliding
+        ? (m.side === 'L' ? L_ANG + Math.PI : R_ANG + Math.PI)
+        : (m.side === 'L' ? L_ANG : R_ANG);
+      const c = m.hitFlash > 0 ? '#ffffff' : m.color;
+
+      glow(m.color, m.hitFlash > 0 ? 20 : 9, () => {
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(angle);
+        ctx.fillStyle = c;
+        const s = m.sz;
+        // Spaceship silhouette
+        ctx.beginPath();
+        ctx.moveTo(s * 1.3, 0);
+        ctx.lineTo(-s, -s * 0.65);
+        ctx.lineTo(-s * 0.3, 0);
+        ctx.lineTo(-s, s * 0.65);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+
+      // HP pips for multi-hit enemies
+      if (m.maxHp > 1) {
+        for (let i = 0; i < m.maxHp; i++) {
+          ctx.fillStyle = i < m.hp ? m.color : '#1e1e1e';
+          ctx.beginPath();
+          ctx.arc(pos.x + (i - (m.maxHp - 1) / 2) * 6, pos.y - m.sz - 5, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  // ── Draw: particles ───────────────────────────────────────────────────────────
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle   = p.color;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Draw: HUD ────────────────────────────────────────────────────────────────
+  function drawHUD() {
+    const HY = H - 68;
+    ctx.fillStyle = 'rgba(5,5,8,0.90)';
+    ctx.fillRect(0, HY, W, 68);
+    ctx.strokeStyle = GREEN + '22';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, HY); ctx.lineTo(W, HY); ctx.stroke();
+
+    // HP pips
+    for (let i = 0; i < 5; i++) {
+      const filled = i < playerHp;
+      glow(filled ? GREEN : '#000', filled ? 8 : 0, () => {
+        ctx.beginPath(); ctx.arc(28 + i * 24, HY + 22, 8, 0, Math.PI * 2);
+        ctx.fillStyle   = filled ? GREEN : '#111';
+        ctx.strokeStyle = filled ? GREEN : '#333';
+        ctx.lineWidth   = 1.5;
+        filled ? ctx.fill() : (ctx.fill(), ctx.stroke());
+      });
+    }
+
+    txt(`WAVE ${wave}`, W / 2, HY + 22, '#ffffff66', 13);
+
+    glow(GREEN, 6, () => txt(String(score).padStart(5, '0'), W - 14, HY + 22, GREEN, 17, 'right'));
+    if (best > 0) txt(`best:${best}`, W - 12, HY + 46, GREEN + '44', 10, 'right');
+
+    if (slamCharge >= 120) {
+      glow(PINK, 14, () => txt('◆ SLAM READY ◆', W / 2, HY + 46, PINK, 12));
+    } else {
+      txt('← tap left  /  tap right →', W / 2, HY + 46, GREEN + '33', 10);
+    }
+
+    // Combo badge
+    if (comboCount >= 3 && comboTimer > 20) {
+      ctx.globalAlpha = Math.min(1, comboTimer / 35);
+      glow(CYAN, 12, () => txt(`${comboCount}× COMBO`, W / 2, HY - 28, CYAN, 15));
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ── Draw: screens ─────────────────────────────────────────────────────────────
+  function drawOverlay() {
+    ctx.fillStyle = 'rgba(10,10,15,0.72)';
+    ctx.fillRect(0, 0, W, H - 68);
+
+    if (mode === 'start') {
+      glow(GREEN, 22, () => txt('PEAK//HOLD', W / 2, H / 2 - 100, GREEN, 32));
+      txt('space monsters climb the hill', W / 2, H / 2 - 42, '#ffffff66', 12);
+      txt('tap left half  —  punch left',  W / 2, H / 2 - 18, '#ffffff55', 12);
+      txt('tap right half  —  punch right', W / 2, H / 2 + 4,  '#ffffff55', 12);
+      glow(PINK, 8, () => txt('wait to charge a SLAM attack', W / 2, H / 2 + 30, PINK + 'bb', 11));
+      glow(PINK, 10, () => txt('[ tap to begin ]', W / 2, H / 2 + 78, PINK, 15));
+      if (best > 0) txt('best score: ' + best, W / 2, H / 2 + 105, GREEN + '55', 11);
+    }
+
+    if (mode === 'dead') {
+      glow(PINK, 22, () => txt('// overrun //', W / 2, H / 2 - 100, PINK, 26));
+      txt('wave: '  + wave,  W / 2, H / 2 - 40, '#ffffff77', 14);
+      txt('score: ' + score, W / 2, H / 2 - 12, GREEN, 22);
+      txt('best:  ' + best,  W / 2, H / 2 + 20, GREEN + '77', 15);
+      glow(GREEN, 10, () => txt('[ tap to retry ]', W / 2, H / 2 + 70, GREEN, 14));
+    }
+  }
+
+  // ── Draw: main ───────────────────────────────────────────────────────────────
+  function draw() {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    // Stars
+    for (const s of stars_bg) {
+      const a = 0.35 + 0.28 * Math.sin(s.tw);
+      ctx.fillStyle = `rgba(255,255,255,${a})`;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Global scanlines
+    for (let y = 0; y < H; y += 4) {
+      ctx.fillStyle = 'rgba(0,0,0,0.05)';
+      ctx.fillRect(0, y, W, 1);
+    }
+
+    if (mode === 'start') { drawHill(); drawOverlay(); return; }
+
+    drawHill();
+    drawMonsters();
+    drawParticles();
+    drawPlayer();
+
+    // Wave notification
+    if (notif && notif.timer > 0) {
+      ctx.globalAlpha = Math.min(1, notif.timer / 22);
+      glow(notif.color, 18, () => txt(notif.text, W / 2, PEAK_Y - 42, notif.color, 17));
+      ctx.globalAlpha = 1;
+    }
+
+    drawHUD();
+
+    // Slam / hit screen flash
+    if (screenFlash > 0) {
+      ctx.fillStyle = `rgba(255,0,200,${(screenFlash / 9) * 0.17})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (mode === 'dead') drawOverlay();
+  }
+
+  // ── Loop ─────────────────────────────────────────────────────────────────────
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+  loop();
+  </script>
+</body>
+</html>
