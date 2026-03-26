@@ -1,0 +1,10 @@
+{
+  "name": "VOID//CUT",
+  "short_name": "VOID//CUT",
+  "start_url": "https://nimrodtalmon.github.io/game1/game5.html",
+  "scope": "https://nimrodtalmon.github.io/game1/",
+  "display": "fullscreen",
+  "background_color": "#0a0a0f",
+  "theme_color": "#00ff9f",
+  "icons": [{ "src": "icon-game5.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>VOID//CUT</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><rect x='4' y='4' width='24' height='24' fill='none' stroke='%2300ff9f' stroke-width='1.5'/><rect x='4' y='4' width='12' height='12' fill='%2300ff9f' opacity='0.6'/><circle cx='22' cy='22' r='4' fill='%23ff00c8'/></svg>">
+  <link rel="manifest" href="manifest-game5.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="VOID//CUT">
+  <meta name="theme-color" content="#0a0a0f">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+    canvas { display: block; touch-action: none; }
+    #back { position: fixed; top: 1rem; left: 1rem; color: #00ff9f55; font-size: 0.75rem; text-decoration: none; letter-spacing: 0.15em; font-family: monospace; z-index: 10; }
+    #back:hover { color: #00ff9f; }
+  </style>
+</head>
+<body>
+  <a href="index.html" id="back">← back</a>
+  <canvas id="c"></canvas>
+  <script>
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
+
+  // ── Layout ───────────────────────────────────────────────────────────────────
+  const CELL = 16, COLS = 25, ROWS = 30;
+  const GAME_W = COLS * CELL;   // 400
+  const GAME_H = ROWS * CELL;   // 480
+  const HUD_H  = 120;
+  const W = GAME_W, H = GAME_H + HUD_H; // 400 × 600
+
+  const INNER = (COLS - 2) * (ROWS - 2); // 644 claimable inner cells
+
+  // Cell states
+  const EMPTY = 0, CLAIMED = 1, TRAIL = 2;
+
+  // Directions: 0=UP 1=RIGHT 2=DOWN 3=LEFT
+  const DIRS = [{ dc: 0, dr: -1 }, { dc: 1, dr: 0 }, { dc: 0, dr: 1 }, { dc: -1, dr: 0 }];
+
+  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff', BG = '#0a0a0f';
+
+  let scale = 1;
+  function resize() {
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    canvas.width  = W; canvas.height = H;
+    canvas.style.width  = W * scale + 'px';
+    canvas.style.height = H * scale + 'px';
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // ── State ────────────────────────────────────────────────────────────────────
+  let mode = 'start';
+  let grid, player, enemies, particles;
+  let lives, score, best, level, targetPct, cachedPct, trailCount;
+  let tickTimer, deathFlash, levelClearTimer;
+
+  best = +(localStorage.getItem('voidcut_best') || 0);
+
+  // ── Grid init ────────────────────────────────────────────────────────────────
+  function initGrid() {
+    grid = Array.from({ length: ROWS }, () => new Uint8Array(COLS));
+    for (let c = 0; c < COLS; c++) { grid[0][c] = CLAIMED; grid[ROWS-1][c] = CLAIMED; }
+    for (let r = 0; r < ROWS; r++) { grid[r][0] = CLAIMED; grid[r][COLS-1] = CLAIMED; }
+    trailCount = 0;
+    cachedPct  = 0;
+  }
+
+  // ── Level init ───────────────────────────────────────────────────────────────
+  function initLevel() {
+    initGrid();
+    player = { col: Math.floor(COLS / 2), row: 0, dir: 2, nextDir: 2 };
+    targetPct = Math.min(55 + level * 5, 75);
+    tickTimer = 0;
+    deathFlash = 0;
+    levelClearTimer = 0;
+    particles = [];
+
+    const counts = [2, 2, 3, 3, 4, 5, 6];
+    const n = counts[Math.min(level - 1, counts.length - 1)];
+    enemies = [];
+    for (let i = 0; i < n; i++) {
+      const c = 3 + Math.floor(Math.random() * (COLS - 6));
+      const r = 3 + Math.floor(Math.random() * (ROWS - 6));
+      const angle = (i / n) * Math.PI * 2 + Math.random() * 0.8;
+      const spd   = (1.3 + Math.random() * 0.7) * (1 + (level - 1) * 0.07);
+      enemies.push({
+        x: c * CELL + CELL / 2,
+        y: r * CELL + CELL / 2,
+        vx: Math.cos(angle) * spd,
+        vy: Math.sin(angle) * spd,
+        color: [PINK, CYAN, '#ffee44'][i % 3],
+        trail: [],
+      });
+    }
+  }
+
+  function startGame() {
+    mode   = 'play';
+    lives  = 3;
+    score  = 0;
+    level  = 1;
+    initLevel();
+  }
+
+  // ── Flood fill on cut ────────────────────────────────────────────────────────
+  function completeCut() {
+    // 1. Convert trail → claimed
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        if (grid[r][c] === TRAIL) grid[r][c] = CLAIMED;
+    trailCount = 0;
+
+    // 2. BFS from every enemy → mark reachable EMPTY cells
+    const reach = Array.from({ length: ROWS }, () => new Uint8Array(COLS));
+    const q = [];
+    for (const e of enemies) {
+      const ec = Math.floor(e.x / CELL), er = Math.floor(e.y / CELL);
+      if (ec >= 0 && ec < COLS && er >= 0 && er < ROWS
+          && grid[er][ec] === EMPTY && !reach[er][ec]) {
+        reach[er][ec] = 1;
+        q.push(er * COLS + ec);
+      }
+    }
+    let head = 0;
+    while (head < q.length) {
+      const idx = q[head++];
+      const r = (idx / COLS) | 0, c = idx % COLS;
+      for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+        const nr = r + dr, nc = c + dc;
+        if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS
+            && grid[nr][nc] === EMPTY && !reach[nr][nc]) {
+          reach[nr][nc] = 1;
+          q.push(nr * COLS + nc);
+        }
+      }
+    }
+
+    // 3. Claim every unreachable EMPTY cell
+    let gained = 0;
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        if (grid[r][c] === EMPTY && !reach[r][c]) { grid[r][c] = CLAIMED; gained++; }
+
+    score += gained * 10 * level;
+    burst(player.col * CELL + CELL / 2, player.row * CELL + CELL / 2, GREEN, 12);
+
+    // Update cached pct
+    let cnt = 0;
+    for (let r = 1; r < ROWS - 1; r++)
+      for (let c = 1; c < COLS - 1; c++)
+        if (grid[r][c] === CLAIMED) cnt++;
+    cachedPct = Math.floor(cnt / INNER * 100);
+
+    if (cachedPct >= targetPct) {
+      score += level * 500;
+      if (score > best) { best = score; localStorage.setItem('voidcut_best', best); }
+      mode = 'levelclear';
+    }
+  }
+
+  // ── Death ────────────────────────────────────────────────────────────────────
+  function loseLife() {
+    lives--;
+    deathFlash = 22;
+    burst(player.col * CELL + CELL / 2, player.row * CELL + CELL / 2, PINK, 20);
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        if (grid[r][c] === TRAIL) grid[r][c] = EMPTY;
+    trailCount = 0;
+    player.col     = Math.floor(COLS / 2);
+    player.row     = 0;
+    player.dir     = 2;
+    player.nextDir = 2;
+    if (lives <= 0) {
+      mode = 'gameover';
+      if (score > best) { best = score; localStorage.setItem('voidcut_best', best); }
+    }
+  }
+
+  // ── Particles ─────────────────────────────────────────────────────────────────
+  function burst(x, y, color, n = 8) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, v = 1 + Math.random() * 3;
+      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, color });
+    }
+  }
+
+  // ── Input ────────────────────────────────────────────────────────────────────
+  const KEY_DIR = { ArrowUp:0, ArrowRight:1, ArrowDown:2, ArrowLeft:3,
+                    KeyW:0,    KeyD:1,        KeyS:2,       KeyA:3 };
+  document.addEventListener('keydown', e => {
+    if (mode !== 'play') { if (['Space','Enter'].includes(e.code)) { if (mode !== 'play') tryStart(); } return; }
+    const d = KEY_DIR[e.code];
+    if (d !== undefined) { player.nextDir = d; e.preventDefault(); }
+  });
+
+  function tryStart() {
+    if (mode === 'start' || mode === 'gameover') startGame();
+    else if (mode === 'levelclear') { /* handled by timer */ }
+  }
+
+  let touchStart = null;
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, { passive: false });
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    if (mode !== 'play') { tryStart(); return; }
+    if (!touchStart) return;
+    const dx = e.changedTouches[0].clientX - touchStart.x;
+    const dy = e.changedTouches[0].clientY - touchStart.y;
+    touchStart = null;
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    player.nextDir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0);
+  }, { passive: false });
+
+  canvas.addEventListener('pointerdown', e => {
+    if (mode !== 'play') { e.preventDefault(); tryStart(); }
+  });
+
+  // ── Enemy movement ────────────────────────────────────────────────────────────
+  function isSolid(px, py) {
+    const c = (px / CELL) | 0, r = (py / CELL) | 0;
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return true;
+    return grid[r][c] === CLAIMED;
+  }
+
+  function updateEnemies() {
+    const RAD = 4;
+    for (const e of enemies) {
+      e.trail.push({ x: e.x, y: e.y });
+      if (e.trail.length > 10) e.trail.shift();
+
+      // X movement
+      const nx = e.x + e.vx;
+      const lx = e.vx > 0 ? nx + RAD : nx - RAD;
+      if (isSolid(lx, e.y - RAD + 1) || isSolid(lx, e.y + RAD - 1)) e.vx = -e.vx;
+      else e.x = nx;
+
+      // Y movement
+      const ny = e.y + e.vy;
+      const ly = e.vy > 0 ? ny + RAD : ny - RAD;
+      if (isSolid(e.x - RAD + 1, ly) || isSolid(e.x + RAD - 1, ly)) e.vy = -e.vy;
+      else e.y = ny;
+
+      // Trail collision
+      if (trailCount > 0) {
+        const ec = (e.x / CELL) | 0, er = (e.y / CELL) | 0;
+        if (ec >= 0 && ec < COLS && er >= 0 && er < ROWS && grid[er][ec] === TRAIL) {
+          loseLife(); return;
+        }
+      }
+    }
+  }
+
+  // ── Player tick ───────────────────────────────────────────────────────────────
+  const TICK_MS = 85;
+
+  function gameTick() {
+    player.dir = player.nextDir;
+    const { dc, dr } = DIRS[player.dir];
+    const nc = player.col + dc, nr = player.row + dr;
+
+    if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) return;
+
+    const nextCell = grid[nr][nc];
+    if (nextCell === TRAIL) { loseLife(); return; }
+
+    player.col = nc; player.row = nr;
+
+    if (nextCell === EMPTY) {
+      grid[nr][nc] = TRAIL;
+      trailCount++;
+    } else if (nextCell === CLAIMED && trailCount > 0) {
+      completeCut();
+    }
+
+    // Player stepped on an enemy
+    for (const e of enemies) {
+      if (((e.x / CELL) | 0) === player.col && ((e.y / CELL) | 0) === player.row) {
+        loseLife(); return;
+      }
+    }
+  }
+
+  // ── Update ───────────────────────────────────────────────────────────────────
+  let lastTs = 0;
+  function update(ts) {
+    const dt = lastTs ? Math.min(ts - lastTs, 80) : 16;
+    lastTs = ts;
+
+    if (mode === 'levelclear') {
+      levelClearTimer++;
+      if (levelClearTimer > 140) { level++; initLevel(); mode = 'play'; }
+      return;
+    }
+    if (mode !== 'play') return;
+
+    if (deathFlash > 0) deathFlash--;
+
+    for (const p of particles) {
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.91; p.vy *= 0.91;
+      p.life -= 0.04;
+    }
+    particles = particles.filter(p => p.life > 0);
+
+    updateEnemies();
+    if (mode !== 'play') return; // loseLife may have changed mode
+
+    tickTimer += dt;
+    if (tickTimer >= TICK_MS) { tickTimer -= TICK_MS; gameTick(); }
+  }
+
+  // ── Draw helpers ──────────────────────────────────────────────────────────────
+  function glow(color, blur, fn) {
+    ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; fn(); ctx.restore();
+  }
+  function txt(s, x, y, color, size, align = 'center') {
+    ctx.fillStyle = color; ctx.font = `${size}px monospace`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillText(s, x, y);
+  }
+
+  // ── Draw: grid ───────────────────────────────────────────────────────────────
+  function drawGrid() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const px = c * CELL, py = r * CELL;
+        const cell = grid[r][c];
+        if (cell === EMPTY) {
+          ctx.fillStyle = '#07070f';
+          ctx.fillRect(px, py, CELL, CELL);
+          if ((r + c) % 7 === 0) {
+            ctx.fillStyle = '#ffffff09';
+            ctx.fillRect(px + 7, py + 7, 1, 1);
+          }
+        } else if (cell === CLAIMED) {
+          ctx.fillStyle = '#011209';
+          ctx.fillRect(px, py, CELL, CELL);
+          ctx.strokeStyle = '#00ff9f1a';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(px + 0.5, py + 0.5, CELL - 1, CELL - 1);
+        } else if (cell === TRAIL) {
+          ctx.fillStyle = '#00ff9f22';
+          ctx.fillRect(px, py, CELL, CELL);
+          glow(GREEN, 10, () => {
+            ctx.fillStyle = GREEN;
+            ctx.fillRect(px + 5, py + 5, CELL - 10, CELL - 10);
+          });
+        }
+      }
+    }
+  }
+
+  // ── Draw: player ─────────────────────────────────────────────────────────────
+  function drawPlayer() {
+    const px = player.col * CELL + CELL / 2;
+    const py = player.row * CELL + CELL / 2;
+    glow(GREEN, 18, () => {
+      ctx.fillStyle = GREEN;
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+    });
+  }
+
+  // ── Draw: enemies ─────────────────────────────────────────────────────────────
+  function drawEnemies() {
+    for (const e of enemies) {
+      for (let i = 0; i < e.trail.length; i++) {
+        const t = e.trail[i];
+        ctx.globalAlpha = (i / e.trail.length) * 0.35;
+        ctx.fillStyle = e.color;
+        const rs = 2 * (i / e.trail.length);
+        ctx.beginPath(); ctx.arc(t.x, t.y, Math.max(rs, 0.5), 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      glow(e.color, 16, () => {
+        ctx.fillStyle = e.color;
+        ctx.beginPath(); ctx.arc(e.x, e.y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath(); ctx.arc(e.x - 2, e.y - 2, 2, 0, Math.PI * 2); ctx.fill();
+      });
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Draw: particles ───────────────────────────────────────────────────────────
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle   = p.color;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Draw: HUD ────────────────────────────────────────────────────────────────
+  function drawHUD() {
+    const hy = GAME_H;
+    ctx.fillStyle = '#050508';
+    ctx.fillRect(0, hy, W, HUD_H);
+    ctx.strokeStyle = '#00ff9f22';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(W, hy); ctx.stroke();
+
+    // Lives
+    for (let i = 0; i < 3; i++) {
+      const f = i < lives;
+      glow(f ? GREEN : '#000', f ? 8 : 0, () => {
+        ctx.fillStyle   = f ? GREEN : '#111';
+        ctx.strokeStyle = f ? GREEN : '#333';
+        ctx.lineWidth   = 1.5;
+        ctx.beginPath(); ctx.arc(24 + i * 24, hy + 24, 7, 0, Math.PI * 2);
+        f ? ctx.fill() : (ctx.fill(), ctx.stroke());
+      });
+    }
+
+    txt(`LVL ${level}`, W / 2, hy + 24, '#ffffff66', 13);
+    glow(GREEN, 6, () => txt(String(score).padStart(6, '0'), W - 14, hy + 24, GREEN, 16, 'right'));
+    if (best > 0) txt(`best:${best}`, W - 12, hy + 44, GREEN + '44', 10, 'right');
+
+    // Progress bar
+    const pct    = cachedPct;
+    const barX   = 10, barY = hy + 46, barW = W - 20, barH = 14;
+    ctx.fillStyle   = '#0a0a0f';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.strokeStyle = '#00ff9f33';
+    ctx.lineWidth   = 1;
+    ctx.strokeRect(barX, barY, barW, barH);
+
+    glow(GREEN, 8, () => {
+      ctx.fillStyle = GREEN + '99';
+      ctx.fillRect(barX, barY, (pct / 100) * barW, barH);
+    });
+
+    // Target marker
+    const tgtX = barX + (targetPct / 100) * barW;
+    glow(PINK, 6, () => {
+      ctx.strokeStyle = PINK; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(tgtX, barY - 3); ctx.lineTo(tgtX, barY + barH + 3); ctx.stroke();
+    });
+
+    txt(`${pct}%`, barX + 4, barY + barH / 2, pct >= targetPct ? GREEN : GREEN + 'aa', 9, 'left');
+    txt(`target ${targetPct}%`, W / 2, barY + barH + 14, '#ffffff44', 10);
+    txt('swipe or arrow keys', W / 2, barY + barH + 30, '#ffffff22', 9);
+  }
+
+  // ── Draw: overlay ─────────────────────────────────────────────────────────────
+  function drawOverlay() {
+    ctx.fillStyle = 'rgba(10,10,15,0.78)';
+    ctx.fillRect(0, 0, W, GAME_H);
+
+    if (mode === 'start') {
+      glow(GREEN, 22, () => txt('VOID//CUT', W / 2, GAME_H / 2 - 90, GREEN, 34));
+      txt('carve through the void', W / 2, GAME_H / 2 - 34, '#ffffff77', 12);
+      txt('connect your trail back to safe ground', W / 2, GAME_H / 2 - 12, '#ffffff55', 11);
+      txt('don\'t let enemies touch your trail', W / 2, GAME_H / 2 + 10, '#ffffff44', 11);
+      glow(PINK, 10, () => txt('[ tap to start ]', W / 2, GAME_H / 2 + 62, PINK, 15));
+      if (best > 0) txt('best: ' + best, W / 2, GAME_H / 2 + 90, GREEN + '55', 11);
+    }
+
+    if (mode === 'gameover') {
+      glow(PINK, 22, () => txt('// terminated //', W / 2, GAME_H / 2 - 90, PINK, 26));
+      txt('score: ' + score, W / 2, GAME_H / 2 - 28, GREEN, 20);
+      txt('best:  ' + best,  W / 2, GAME_H / 2 + 4,  GREEN + '77', 15);
+      glow(GREEN, 10, () => txt('[ tap to retry ]', W / 2, GAME_H / 2 + 60, GREEN, 14));
+    }
+
+    if (mode === 'levelclear') {
+      glow(GREEN, 20, () => txt(`SECTOR ${level} CLAIMED`, W / 2, GAME_H / 2 - 30, GREEN, 22));
+      txt('score: ' + score, W / 2, GAME_H / 2 + 14, '#ffffff88', 14);
+    }
+  }
+
+  // ── Draw: main ───────────────────────────────────────────────────────────────
+  function draw() {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    for (let y = 0; y < H; y += 4) {
+      ctx.fillStyle = 'rgba(0,0,0,0.05)';
+      ctx.fillRect(0, y, W, 1);
+    }
+
+    if (mode === 'start' || mode === 'gameover') { drawHUD(); drawOverlay(); return; }
+
+    drawGrid();
+    drawEnemies();
+    drawParticles();
+    if (mode === 'play') drawPlayer();
+
+    drawHUD();
+    if (mode === 'levelclear') drawOverlay();
+
+    if (deathFlash > 0) {
+      ctx.fillStyle = `rgba(255,0,200,${(deathFlash / 22) * 0.28})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  // ── Loop ─────────────────────────────────────────────────────────────────────
+  function loop(ts) {
+    update(ts);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  particles = [];
+  requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
