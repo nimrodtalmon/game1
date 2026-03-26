@@ -26,7 +26,7 @@
   const ctx    = canvas.getContext('2d');
 
   const W = 400, H = 600;
-  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff', BG = '#0a0a0f';
+  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff', ORANGE = '#ff8800', BG = '#0a0a0f';
 
   let scale = 1;
   function resize() {
@@ -70,15 +70,18 @@
   let comboCount, comboTimer;
   let spawnQueue;
   let notif;  // { text, timer, color }
+  let idleTick;
 
   best = +(localStorage.getItem('peakhold_best') || 0);
 
   // ── Stars ────────────────────────────────────────────────────────────────────
-  const stars_bg = Array.from({ length: 70 }, () => ({
+  const STAR_PALETTES = ['rgba(255,255,255,', 'rgba(0,255,159,', 'rgba(0,212,255,', 'rgba(255,238,68,'];
+  const stars_bg = Array.from({ length: 90 }, () => ({
     x: Math.random() * W,
-    y: Math.random() * (PEAK_Y + 80),
-    r: Math.random() + 0.3,
+    y: Math.random() * (PEAK_Y + 70),
+    r: Math.random() * 1.3 + 0.2,
     tw: Math.random() * Math.PI * 2,
+    col: STAR_PALETTES[Math.random() < 0.72 ? 0 : (Math.random() < 0.5 ? 1 : Math.random() < 0.5 ? 2 : 3)],
   }));
 
   // ── Init ─────────────────────────────────────────────────────────────────────
@@ -100,6 +103,7 @@
     comboTimer   = 0;
     spawnQueue   = [];
     notif        = null;
+    idleTick     = 0;
   }
 
   // ── Wave system ──────────────────────────────────────────────────────────────
@@ -209,6 +213,8 @@
   function update() {
     if (mode !== 'play') return;
 
+    idleTick++;
+
     // Stars twinkle
     for (const s of stars_bg) s.tw += 0.017;
 
@@ -314,42 +320,110 @@
     ctx.fillText(s, x, y);
   }
 
+  // ── Draw: background ─────────────────────────────────────────────────────────
+  function drawBackground() {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    // Animated aurora bands
+    const at = idleTick * 0.008;
+    for (let i = 0; i < 3; i++) {
+      const yBase = 28 + i * 38 + Math.sin(at + i * 1.4) * 9;
+      const alpha = 0.022 + 0.010 * Math.sin(at * 0.7 + i);
+      const ag = ctx.createLinearGradient(0, yBase - 22, 0, yBase + 22);
+      const col = i === 1 ? `rgba(0,212,255,${alpha})` : `rgba(0,255,159,${alpha})`;
+      ag.addColorStop(0, 'rgba(0,0,0,0)');
+      ag.addColorStop(0.5, col);
+      ag.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = ag;
+      ctx.fillRect(0, yBase - 22, W, 44);
+    }
+
+    // Planet with ring
+    const px = 312, py = 60, pr = 30;
+    const pg = ctx.createRadialGradient(px - 7, py - 7, 2, px, py, pr);
+    pg.addColorStop(0,   '#1a3a2a');
+    pg.addColorStop(0.55,'#0a1a10');
+    pg.addColorStop(1,   '#040a06');
+    glow(GREEN + '44', 20, () => {
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2);
+      ctx.fillStyle = pg; ctx.fill();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0,255,159,0.20)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.ellipse(px, py, pr * 1.65, pr * 0.30, -0.22, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    });
+
+    // Stars
+    for (const s of stars_bg) {
+      const a = 0.35 + 0.28 * Math.sin(s.tw);
+      ctx.fillStyle = s.col + a + ')';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Scanlines
+    for (let y = 0; y < H; y += 4) {
+      ctx.fillStyle = 'rgba(0,0,0,0.05)';
+      ctx.fillRect(0, y, W, 1);
+    }
+  }
+
   // ── Draw: hill ───────────────────────────────────────────────────────────────
   function drawHill() {
-    // Fill
+    // Fill with richer gradient
     ctx.beginPath();
     ctx.moveTo(PEAK_X, PEAK_Y);
     ctx.lineTo(LBX, LBY);
     ctx.lineTo(RBX, RBY);
     ctx.closePath();
     const grad = ctx.createLinearGradient(PEAK_X, PEAK_Y, PEAK_X, LBY);
-    grad.addColorStop(0, '#002214');
-    grad.addColorStop(1, '#000c07');
+    grad.addColorStop(0,    '#1a4a2a');
+    grad.addColorStop(0.15, '#0d2a18');
+    grad.addColorStop(0.55, '#071a0f');
+    grad.addColorStop(1,    '#030a05');
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Horizontal contour lines
-    for (let t = 0.12; t < 1; t += 0.11) {
+    // Rock strata lines (stronger near top)
+    for (let t = 0.08; t < 1; t += 0.09) {
       const lp = slopePos('L', t), rp = slopePos('R', t);
-      ctx.strokeStyle = `rgba(0,255,159,${0.03 + t * 0.055})`;
-      ctx.lineWidth = 1;
+      const alpha = 0.02 + t * 0.065;
+      ctx.strokeStyle = `rgba(0,255,159,${alpha})`;
+      ctx.lineWidth = t > 0.65 ? 1.5 : 1;
       ctx.beginPath(); ctx.moveTo(lp.x, lp.y); ctx.lineTo(rp.x, rp.y); ctx.stroke();
     }
 
     // Glowing edges
-    glow(GREEN, 14, () => {
+    glow(GREEN, 16, () => {
       ctx.strokeStyle = GREEN + 'cc';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.moveTo(PEAK_X, PEAK_Y); ctx.lineTo(LBX, LBY);
       ctx.moveTo(PEAK_X, PEAK_Y); ctx.lineTo(RBX, RBY);
       ctx.stroke();
     });
 
+    // Snow cap
+    const lSnow = slopePos('L', 0.12);
+    const rSnow = slopePos('R', 0.12);
+    ctx.beginPath();
+    ctx.moveTo(PEAK_X, PEAK_Y - 1);
+    ctx.lineTo(lSnow.x, lSnow.y);
+    ctx.lineTo(rSnow.x, rSnow.y);
+    ctx.closePath();
+    const snowGrad = ctx.createLinearGradient(PEAK_X, PEAK_Y, PEAK_X, lSnow.y);
+    snowGrad.addColorStop(0, 'rgba(255,255,255,0.88)');
+    snowGrad.addColorStop(1, 'rgba(180,255,220,0.10)');
+    ctx.fillStyle = snowGrad;
+    ctx.fill();
+
     // Peak dot
-    glow(GREEN, 24, () => {
-      ctx.fillStyle = GREEN;
-      ctx.beginPath(); ctx.arc(PEAK_X, PEAK_Y, 3, 0, Math.PI * 2); ctx.fill();
+    glow(GREEN, 28, () => {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(PEAK_X, PEAK_Y, 3.5, 0, Math.PI * 2); ctx.fill();
     });
   }
 
@@ -543,21 +617,7 @@
 
   // ── Draw: main ───────────────────────────────────────────────────────────────
   function draw() {
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, W, H);
-
-    // Stars
-    for (const s of stars_bg) {
-      const a = 0.35 + 0.28 * Math.sin(s.tw);
-      ctx.fillStyle = `rgba(255,255,255,${a})`;
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
-    }
-
-    // Global scanlines
-    for (let y = 0; y < H; y += 4) {
-      ctx.fillStyle = 'rgba(0,0,0,0.05)';
-      ctx.fillRect(0, y, W, 1);
-    }
+    drawBackground();
 
     if (mode === 'start') { drawHill(); drawOverlay(); return; }
 
