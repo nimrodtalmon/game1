@@ -64,7 +64,7 @@
 
   // ── State ────────────────────────────────────────────────────────────────────
   let mode = 'start';
-  let monsters, particles, stars;
+  let monsters, particles, popups;
   let playerHp, score, best, wave, waveActive, waveTimer;
   let punchCooldown, punchAnim, punchSide, slamCharge, screenFlash;
   let comboCount, comboTimer;
@@ -74,10 +74,10 @@
   best = +(localStorage.getItem('peakhold_best') || 0);
 
   // ── Stars ────────────────────────────────────────────────────────────────────
-  const stars_bg = Array.from({ length: 70 }, () => ({
+  const stars_bg = Array.from({ length: 110 }, () => ({
     x: Math.random() * W,
-    y: Math.random() * (PEAK_Y + 80),
-    r: Math.random() + 0.3,
+    y: Math.random() * H * 0.86,
+    r: Math.random() * 0.9 + 0.2,
     tw: Math.random() * Math.PI * 2,
   }));
 
@@ -86,6 +86,7 @@
     mode         = 'play';
     monsters     = [];
     particles    = [];
+    popups       = [];
     playerHp     = 5;
     score        = 0;
     wave         = 0;
@@ -130,7 +131,7 @@
       vt: d.spd,
       hp: d.hp, maxHp: d.hp,
       spd: d.spd, sz: d.sz, color: d.color, reward: d.reward,
-      sliding: false, hitFlash: 0, dead: false,
+      sliding: false, hitFlash: 0, dead: false, trail: [],
     });
   }
 
@@ -195,7 +196,10 @@
     if (m.hp <= 0) {
       m.dead = true;
       burst(pos.x, pos.y, m.color, 14);
-      score += m.reward * Math.max(1, Math.ceil(comboCount / 3));
+      const mult = Math.max(1, Math.ceil(comboCount / 3));
+      const pts  = m.reward * mult;
+      score += pts;
+      popups.push({ text: '+' + pts + (mult > 1 ? ' ×' + mult : ''), x: pos.x, y: pos.y - 8, vy: -1.1, life: 1.0, color: m.color });
       comboCount++;
       comboTimer = 130;
     } else {
@@ -227,6 +231,10 @@
     slamCharge = Math.min(120, slamCharge + 1);
     if (comboTimer > 0) { comboTimer--; if (!comboTimer) comboCount = 0; }
     if (notif) { notif.timer--; if (notif.timer <= 0) notif = null; }
+
+    // Popups
+    for (const p of popups) { p.y += p.vy; p.vy *= 0.94; p.life -= 0.022; }
+    popups = popups.filter(p => p.life > 0);
 
     // Wave management
     if (!waveActive) {
@@ -262,6 +270,11 @@
         m.vt = m.spd;
       }
       m.t += m.vt;
+
+      // Trail
+      const tp = slopePos(m.side, m.t);
+      m.trail.push({ x: tp.x, y: tp.y });
+      if (m.trail.length > 7) m.trail.shift();
 
       // Reached the top
       if (m.t >= 0.97) {
@@ -323,18 +336,28 @@
     ctx.lineTo(RBX, RBY);
     ctx.closePath();
     const grad = ctx.createLinearGradient(PEAK_X, PEAK_Y, PEAK_X, LBY);
-    grad.addColorStop(0, '#002214');
-    grad.addColorStop(1, '#000c07');
+    grad.addColorStop(0,    '#003322');
+    grad.addColorStop(0.35, '#001a10');
+    grad.addColorStop(1,    '#000c07');
     ctx.fillStyle = grad;
     ctx.fill();
 
     // Horizontal contour lines
     for (let t = 0.12; t < 1; t += 0.11) {
       const lp = slopePos('L', t), rp = slopePos('R', t);
-      ctx.strokeStyle = `rgba(0,255,159,${0.03 + t * 0.055})`;
+      ctx.strokeStyle = `rgba(0,255,159,${0.04 + t * 0.07})`;
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(lp.x, lp.y); ctx.lineTo(rp.x, rp.y); ctx.stroke();
     }
+
+    // Peak inner glow
+    const peakGlow = ctx.createRadialGradient(PEAK_X, PEAK_Y, 0, PEAK_X, PEAK_Y, 55);
+    peakGlow.addColorStop(0,   'rgba(0,255,159,0.13)');
+    peakGlow.addColorStop(1,   'rgba(0,255,159,0)');
+    ctx.fillStyle = peakGlow;
+    ctx.beginPath();
+    ctx.moveTo(PEAK_X, PEAK_Y); ctx.lineTo(LBX, LBY); ctx.lineTo(RBX, RBY);
+    ctx.closePath(); ctx.fill();
 
     // Glowing edges
     glow(GREEN, 14, () => {
@@ -433,6 +456,17 @@
     for (const m of monsters) {
       if (m.dead) continue;
       const pos   = slopePos(m.side, m.t);
+
+      // Glow trail
+      for (let i = 0; i < m.trail.length; i++) {
+        const tp = m.trail[i];
+        const a  = (i / m.trail.length) * 0.35;
+        ctx.globalAlpha = a;
+        ctx.fillStyle   = m.color;
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, m.sz * 0.55, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
       const angle = m.sliding
         ? (m.side === 'L' ? L_ANG + Math.PI : R_ANG + Math.PI)
         : (m.side === 'L' ? L_ANG : R_ANG);
@@ -510,9 +544,13 @@
     }
 
     // Combo badge
-    if (comboCount >= 3 && comboTimer > 20) {
-      ctx.globalAlpha = Math.min(1, comboTimer / 35);
-      glow(CYAN, 12, () => txt(`${comboCount}× COMBO`, W / 2, HY - 28, CYAN, 15));
+    if (comboCount >= 2 && comboTimer > 15) {
+      const alpha = Math.min(1, comboTimer / 40);
+      ctx.globalAlpha = alpha;
+      glow(CYAN, 14, () => txt(`${comboCount}× COMBO`, W / 2, HY - 30, CYAN, 16));
+      // Decay bar
+      ctx.fillStyle = CYAN + '55';
+      ctx.fillRect(W / 2 - 44, HY - 18, (comboTimer / 130) * 88, 2);
       ctx.globalAlpha = 1;
     }
   }
@@ -548,10 +586,25 @@
 
     // Stars
     for (const s of stars_bg) {
-      const a = 0.35 + 0.28 * Math.sin(s.tw);
+      const a = 0.3 + 0.25 * Math.sin(s.tw);
       ctx.fillStyle = `rgba(255,255,255,${a})`;
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
     }
+
+    // Distant planet (upper-right)
+    const pg = ctx.createRadialGradient(308, 52, 0, 308, 52, 38);
+    pg.addColorStop(0,   'rgba(20, 60, 100, 0.55)');
+    pg.addColorStop(0.55,'rgba(10, 30, 60,  0.30)');
+    pg.addColorStop(1,   'rgba(0,  0,  0,   0)');
+    ctx.fillStyle = pg;
+    ctx.beginPath(); ctx.arc(308, 52, 38, 0, Math.PI * 2); ctx.fill();
+    // Ring
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    ctx.strokeStyle = CYAN;
+    ctx.lineWidth   = 4;
+    ctx.beginPath(); ctx.ellipse(308, 52, 56, 12, -0.22, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
 
     // Global scanlines
     for (let y = 0; y < H; y += 4) {
@@ -565,6 +618,17 @@
     drawMonsters();
     drawParticles();
     drawPlayer();
+
+    // Score popups
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const p of popups) {
+      ctx.globalAlpha = p.life * p.life;
+      ctx.fillStyle   = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
 
     // Wave notification
     if (notif && notif.timer > 0) {
