@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>WIRE//EAT</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><rect x='4' y='14' width='24' height='4' fill='%2300ff9f'/><rect x='14' y='4' width='4' height='24' fill='%2300ff9f'/><rect x='12' y='12' width='8' height='8' fill='%23ff00c8'/></svg>">
+  <link rel="manifest" href="manifest-game6.json">
+  <link rel="apple-touch-icon" href="icon-game6.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WIRE//EAT">
+  <meta name="theme-color" content="#0a0a0f">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    canvas { display: block; touch-action: none; }
+    #back {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      color: #00ff9f55;
+      font-size: 0.75rem;
+      text-decoration: none;
+      letter-spacing: 0.15em;
+      font-family: monospace;
+      z-index: 10;
+    }
+    #back:hover { color: #00ff9f; }
+  </style>
+</head>
+<body>
+  <a href="index.html" id="back">← back</a>
+  <canvas id="c"></canvas>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    const W = 400, H = 600;
+    const GREEN = '#00ff9f';
+    const PINK  = '#ff00c8';
+    const BG    = '#0a0a0f';
+
+    const COLS = 20, ROWS = 28;
+    const CW = W / COLS;     // cell width  = 20
+    const CH = H / ROWS;     // cell height ≈ 21.4
+
+    function resize() {
+      const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+      canvas.width  = W;
+      canvas.height = H;
+      canvas.style.width  = W * s + 'px';
+      canvas.style.height = H * s + 'px';
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let mode = 'start'; // 'start' | 'play' | 'dead'
+    let score, best = 0;
+    let snake, dir, nextDir, food, particles, tickTimer, tickInterval;
+
+    function init() {
+      score        = 0;
+      tickTimer    = 0;
+      tickInterval = 120; // ms per step (starts moderate)
+      const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
+      snake = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
+      dir      = { x: 1, y: 0 };
+      nextDir  = { x: 1, y: 0 };
+      particles = [];
+      placeFood();
+    }
+
+    function placeFood() {
+      const occupied = new Set(snake.map(s => s.x + ',' + s.y));
+      let fx, fy;
+      do {
+        fx = Math.floor(Math.random() * COLS);
+        fy = Math.floor(Math.random() * ROWS);
+      } while (occupied.has(fx + ',' + fy));
+      food = { x: fx, y: fy, pulse: 0 };
+    }
+
+    // ── Particles ─────────────────────────────────────────────────────────────
+    function burst(px, py, color) {
+      for (let i = 0; i < 10; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const v = 1 + Math.random() * 3;
+        particles.push({ x: px, y: py, vx: Math.cos(a)*v, vy: Math.sin(a)*v,
+                         life: 1, color });
+      }
+    }
+
+    // ── Input ─────────────────────────────────────────────────────────────────
+    const DIRS = { ArrowUp:[0,-1], ArrowDown:[0,1], ArrowLeft:[-1,0], ArrowRight:[1,0],
+                   w:[0,-1], s:[0,1], a:[-1,0], d:[1,0] };
+
+    document.addEventListener('keydown', e => {
+      if (mode === 'start' || mode === 'dead') { mode = 'play'; init(); return; }
+      const d = DIRS[e.key];
+      if (d && !(d[0] === -dir.x && d[1] === -dir.y)) {
+        nextDir = { x: d[0], y: d[1] };
+        e.preventDefault();
+      }
+    });
+
+    // Touch: swipe to steer
+    let touchStart = null;
+    canvas.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      if (mode === 'start' || mode === 'dead') { mode = 'play'; init(); return; }
+      touchStart = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('pointerup', e => {
+      if (!touchStart) return;
+      const dx = e.clientX - touchStart.x;
+      const dy = e.clientY - touchStart.y;
+      touchStart = null;
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; // too small
+      let d;
+      if (Math.abs(dx) > Math.abs(dy)) d = dx > 0 ? [1,0] : [-1,0];
+      else                              d = dy > 0 ? [0,1] : [0,-1];
+      if (!(d[0] === -dir.x && d[1] === -dir.y))
+        nextDir = { x: d[0], y: d[1] };
+    });
+
+    // ── Game tick ─────────────────────────────────────────────────────────────
+    let last = 0;
+    function tick() {
+      dir = nextDir;
+      const head = { x: (snake[0].x + dir.x + COLS) % COLS,
+                     y: (snake[0].y + dir.y + ROWS) % ROWS };
+
+      // Self-collision
+      if (snake.some(s => s.x === head.x && s.y === head.y)) {
+        die(); return;
+      }
+
+      const ate = head.x === food.x && head.y === food.y;
+      snake.unshift(head);
+      if (ate) {
+        score++;
+        burst(food.x * CW + CW/2, food.y * CH + CH/2, PINK);
+        placeFood();
+        // Speed up slightly every 5 points
+        tickInterval = Math.max(55, 120 - Math.floor(score / 5) * 8);
+      } else {
+        snake.pop();
+      }
+    }
+
+    function die() {
+      mode = 'dead';
+      // burst along body
+      for (let i = 0; i < Math.min(snake.length, 8); i++) {
+        burst(snake[i].x * CW + CW/2, snake[i].y * CH + CH/2,
+              i % 2 === 0 ? PINK : GREEN);
+      }
+      if (score > best) best = score;
+    }
+
+    // ── Draw helpers ──────────────────────────────────────────────────────────
+    function glow(color, blur, fn) {
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = blur;
+      fn();
+      ctx.restore();
+    }
+
+    function text(str, x, y, color, size, align = 'center') {
+      ctx.fillStyle    = color;
+      ctx.font         = `${size}px monospace`;
+      ctx.textAlign    = align;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(str, x, y);
+    }
+
+    // ── Draw ──────────────────────────────────────────────────────────────────
+    function draw(ts) {
+      // Background
+      ctx.fillStyle = BG;
+      ctx.fillRect(0, 0, W, H);
+
+      // Grid
+      ctx.strokeStyle = '#00ff9f08';
+      ctx.lineWidth = 1;
+      for (let c = 0; c <= COLS; c++) {
+        ctx.beginPath(); ctx.moveTo(c * CW, 0); ctx.lineTo(c * CW, H); ctx.stroke();
+      }
+      for (let r = 0; r <= ROWS; r++) {
+        ctx.beginPath(); ctx.moveTo(0, r * CH); ctx.lineTo(W, r * CH); ctx.stroke();
+      }
+
+      // Scanlines
+      for (let y = 0; y < H; y += 4) {
+        ctx.fillStyle = 'rgba(0,0,0,0.10)';
+        ctx.fillRect(0, y, W, 1);
+      }
+
+      if (mode === 'start') { drawOverlay(); return; }
+
+      // Food (pulsing)
+      food.pulse = (food.pulse + 0.07) % (Math.PI * 2);
+      const fp = 0.55 + 0.2 * Math.sin(food.pulse);
+      glow(PINK, 18, () => {
+        ctx.fillStyle = PINK;
+        const fw = CW * fp, fh = CH * fp;
+        ctx.fillRect(food.x * CW + (CW - fw) / 2,
+                     food.y * CH + (CH - fh) / 2, fw, fh);
+      });
+
+      // Snake
+      for (let i = 0; i < snake.length; i++) {
+        const s = snake[i];
+        const t = 1 - i / snake.length;
+        const color = i === 0 ? GREEN : `rgba(0,${Math.floor(180 + 75*t)},${Math.floor(120*t)},${0.4 + 0.6*t})`;
+        glow(GREEN, i === 0 ? 14 : 0, () => {
+          ctx.fillStyle = color;
+          const pad = i === 0 ? 1 : 2;
+          ctx.fillRect(s.x * CW + pad, s.y * CH + pad, CW - pad*2, CH - pad*2);
+        });
+        // Head details
+        if (i === 0) {
+          ctx.fillStyle = BG;
+          const ex = dir.x, ey = dir.y;
+          const e1x = dir.y !== 0 ? -3 : 0, e1y = dir.x !== 0 ? -3 : 0;
+          const ox = s.x * CW + CW/2 + ex * 4, oy = s.y * CH + CH/2 + ey * 4;
+          ctx.beginPath(); ctx.arc(ox + e1x, oy + e1y, 2.5, 0, Math.PI*2); ctx.fill();
+          ctx.beginPath(); ctx.arc(ox - e1x, oy - e1y, 2.5, 0, Math.PI*2); ctx.fill();
+        }
+      }
+
+      // Particles
+      for (const p of particles) {
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+
+      // Score
+      glow(GREEN, 10, () => {
+        text(String(score).padStart(4, '0'), 20, 28, GREEN, 22, 'left');
+      });
+      if (best > 0) {
+        text('best ' + best, W - 16, 28, '#00ff9f55', 14, 'right');
+      }
+
+      if (mode === 'dead') drawOverlay();
+    }
+
+    function drawOverlay() {
+      ctx.fillStyle = 'rgba(10,10,15,0.72)';
+      ctx.fillRect(0, 0, W, H);
+
+      if (mode === 'start') {
+        glow(GREEN, 20, () => text('WIRE//EAT', W/2, H/2 - 70, GREEN, 30));
+        text('eat the data nodes', W/2, H/2 - 10, '#ffffff99', 13);
+        text('arrow keys  /  swipe to steer', W/2, H/2 + 16, '#ffffff44', 11);
+        text('walls wrap — tail does not', W/2, H/2 + 36, '#ffffff33', 11);
+        glow(PINK, 10, () => text('[ tap to start ]', W/2, H/2 + 80, PINK, 14));
+      }
+
+      if (mode === 'dead') {
+        glow(PINK, 20, () => text('// dead //', W/2, H/2 - 60, PINK, 26));
+        text('score  ' + score, W/2, H/2 - 8, GREEN, 18);
+        text('best   ' + best,  W/2, H/2 + 20, '#00ff9f88', 16);
+        glow(GREEN, 10, () => text('[ tap to retry ]', W/2, H/2 + 66, GREEN, 14));
+      }
+    }
+
+    // ── Loop ─────────────────────────────────────────────────────────────────
+    function loop(ts) {
+      if (mode === 'play') {
+        const dt = ts - last;
+        tickTimer += dt;
+        if (tickTimer >= tickInterval) {
+          tickTimer -= tickInterval;
+          tick();
+        }
+        // Update particles
+        for (const p of particles) {
+          p.x += p.vx; p.y += p.vy;
+          p.vx *= 0.9; p.vy *= 0.9;
+          p.life -= 0.04;
+        }
+        particles = particles.filter(p => p.life > 0);
+      }
+      last = ts;
+      draw(ts);
+      requestAnimationFrame(loop);
+    }
+
+    init();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

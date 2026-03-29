@@ -1,0 +1,10 @@
+{
+  "name": "WIRE//EAT",
+  "short_name": "WIRE//EAT",
+  "start_url": "https://nimrodtalmon.github.io/game1/game6.html",
+  "scope": "https://nimrodtalmon.github.io/game1/",
+  "display": "fullscreen",
+  "background_color": "#0a0a0f",
+  "theme_color": "#00ff9f",
+  "icons": [{ "src": "icon-game6.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
