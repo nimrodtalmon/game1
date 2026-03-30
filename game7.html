@@ -4,11 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>DRIFT//ZONE</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><rect x='13' y='4' width='6' height='24' rx='2' fill='%2300ff9f'/><polygon points='8,14 13,8 13,20' fill='%23ff00c8'/><polygon points='24,14 19,8 19,20' fill='%23ff00c8'/></svg>">
   <link rel="manifest" href="manifest-game7.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="DRIFT//ZONE">
   <meta name="theme-color" content="#0a0a0f">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -23,14 +21,15 @@
   <canvas id="c"></canvas>
   <script>
   const canvas = document.getElementById('c');
-  const ctx    = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d');
 
   const W = 400, H = 600;
-  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff', BG = '#0a0a0f';
+  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff';
 
+  // scale canvas to fit screen
   let scale = 1;
   function resize() {
-    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    scale = Math.min(innerWidth / W, innerHeight / H);
     canvas.width  = W;
     canvas.height = H;
     canvas.style.width  = W * scale + 'px';
@@ -39,466 +38,249 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // ── Road layout ──────────────────────────────────────────────────────────────
-  const RL = 72, RR = 328, RW = RR - RL;   // road left/right edges, width = 256
-  const LW = RW / 3;                         // lane width ~85
-  const LC = [RL + LW * 0.5, RL + LW * 1.5, RL + LW * 2.5]; // lane centers
+  // road bounds
+  const RL = 80, RR = 320;   // left / right edge of road
+  const LANE = (RR - RL) / 3; // lane width ~80
 
-  // ── Car dimensions ───────────────────────────────────────────────────────────
-  const CW = 28, CH = 50;
-  const PY = H - 118;   // player y
+  // player
+  const PW = 28, PH = 48;
+  const PY = H - 110;
 
-  // ── Buildings (pre-generated, tiled) ─────────────────────────────────────────
-  const STRIP_H = H * 6;
-  const bLeft = [], bRight = [];
+  // state
+  let mode, px, ptx, traffic, score, spd, frame, dashOff, best;
+  let leftDown = false, rightDown = false;
 
-  (function genBuildings() {
-    for (const arr of [bLeft, bRight]) {
-      let y = 0;
-      while (y < STRIP_H) {
-        const h = 45 + Math.random() * 130;
-        const w = 22 + Math.random() * 44;
-        const wins = [];
-        for (let wx = 4; wx < w - 4; wx += 9) {
-          for (let wy = 7; wy < h - 7; wy += 13) {
-            if (Math.random() < 0.5) wins.push({ x: wx, y: wy, lit: Math.random() < 0.7 });
-          }
-        }
-        arr.push({ y, h, w, wins });
-        y += h + 3 + Math.random() * 14;
-      }
-    }
-  })();
+  best = +(localStorage.getItem('dz_best') || 0);
 
-  // ── Speed lines (stable x positions) ─────────────────────────────────────────
-  const speedLines = Array.from({ length: 10 }, () => ({
-    x:   RL + 12 + Math.random() * (RW - 24),
-    off: Math.random() * 60,
-    len: 18 + Math.random() * 38,
-  }));
-
-  // ── State ────────────────────────────────────────────────────────────────────
-  let mode = 'start';
-  let px = W / 2, ptx = W / 2;
-  let traffic, particles, popups, powerups;
-  let score, spd, frame;
-  let roadOff;
-  let ghostT, shakeT;
-  const pointers = new Map();
-  let inputL = false, inputR = false;
-
-  let best = +(localStorage.getItem('driftzone_best') || 0);
-
-  // ── Init ─────────────────────────────────────────────────────────────────────
   function init() {
-    mode      = 'play';
-    px        = W / 2;
-    ptx       = W / 2;
-    traffic   = [];
-    particles = [];
-    popups    = [];
-    powerups  = [];
-    score     = 0;
-    spd       = 3.5;
-    frame     = 0;
-    roadOff   = 0;
-    ghostT    = 0;
-    shakeT    = 0;
+    mode    = 'play';
+    px      = W / 2;
+    ptx     = W / 2;
+    traffic = [];
+    score   = 0;
+    spd     = 3;
+    frame   = 0;
+    dashOff = 0;
   }
 
-  // ── Spawning ─────────────────────────────────────────────────────────────────
-  const CAR_COLORS = [PINK, CYAN, '#ffee44', '#ff8822', '#cc44ff'];
-
-  function spawnCar() {
+  // spawn a traffic car
+  function spawn() {
     const lane  = Math.floor(Math.random() * 3);
-    const color = CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)];
+    const cols  = [PINK, CYAN, '#ffee44', '#ff8822', '#cc44ff'];
+    const color = cols[Math.floor(Math.random() * cols.length)];
     traffic.push({
-      x: LC[lane], y: -65,
+      x: RL + lane * LANE + LANE / 2,
+      y: -50,
+      w: 26 + Math.random() * 8,
+      h: 42 + Math.random() * 16,
       color,
-      w: CW - 2 + Math.random() * 10,
-      h: CH - 4 + Math.random() * 20,
-      spd: spd * (0.82 + Math.random() * 0.38),
+      vy: spd * (0.85 + Math.random() * 0.35),
     });
   }
 
-  function spawnPowerup() {
-    const lane = Math.floor(Math.random() * 3);
-    const type = Math.random() < 0.55 ? 'GHOST' : 'CLEAR';
-    powerups.push({ x: LC[lane], y: -32, type, color: type === 'GHOST' ? CYAN : PINK });
-  }
-
-  function burst(x, y, color, n = 10) {
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 4.5;
-      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, color, sz: 2 + Math.random() * 2 });
-    }
-  }
-
-  // ── Input ────────────────────────────────────────────────────────────────────
-  document.addEventListener('keydown', e => {
-    if (mode !== 'play') { if (['Space','Enter'].includes(e.code)) { e.preventDefault(); init(); } return; }
-    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') { e.preventDefault(); inputL = true; }
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') { e.preventDefault(); inputR = true; }
-  });
-  document.addEventListener('keyup', e => {
-    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') inputL = false;
-    if (e.code === 'ArrowRight' || e.code === 'KeyD') inputR = false;
-  });
+  // input
+  let lId = -1, rId = -1;
 
   canvas.addEventListener('pointerdown', e => {
     e.preventDefault();
     if (mode !== 'play') { init(); return; }
-    const r = canvas.getBoundingClientRect();
-    pointers.set(e.pointerId, (e.clientX - r.left) / scale < W / 2 ? 'L' : 'R');
+    const cx = (e.clientX - canvas.getBoundingClientRect().left) / scale;
+    if (cx < W / 2) { leftDown  = true; lId = e.pointerId; }
+    else            { rightDown = true; rId = e.pointerId; }
     canvas.setPointerCapture(e.pointerId);
   });
-  canvas.addEventListener('pointermove', e => {
-    if (!pointers.has(e.pointerId)) return;
-    const r = canvas.getBoundingClientRect();
-    pointers.set(e.pointerId, (e.clientX - r.left) / scale < W / 2 ? 'L' : 'R');
+  canvas.addEventListener('pointerup', e => {
+    if (e.pointerId === lId) { leftDown  = false; lId = -1; }
+    if (e.pointerId === rId) { rightDown = false; rId = -1; }
   });
-  canvas.addEventListener('pointerup',     e => { e.preventDefault(); pointers.delete(e.pointerId); });
-  canvas.addEventListener('pointercancel', e => { e.preventDefault(); pointers.delete(e.pointerId); });
+  canvas.addEventListener('pointercancel', e => {
+    if (e.pointerId === lId) { leftDown  = false; lId = -1; }
+    if (e.pointerId === rId) { rightDown = false; rId = -1; }
+  });
+  document.addEventListener('keydown', e => {
+    if (mode !== 'play') { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); init(); } return; }
+    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') leftDown  = true;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') rightDown = true;
+  });
+  document.addEventListener('keyup', e => {
+    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') leftDown  = false;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') rightDown = false;
+  });
 
-  // ── Update ───────────────────────────────────────────────────────────────────
   function update() {
     if (mode !== 'play') return;
+
     frame++;
-    spd     = 3.5 + frame * 0.0013;
-    score  += spd * 0.08;
-    roadOff = (roadOff + spd) % 60;
+    spd     = 3 + frame * 0.0014;
+    score  += spd * 0.07;
+    dashOff = (dashOff + spd) % 40;
 
-    const pv   = [...pointers.values()];
-    const lHeld = inputL || pv.includes('L');
-    const rHeld = inputR || pv.includes('R');
+    // steer
+    if (leftDown)  ptx = Math.max(RL + PW / 2, ptx - 5);
+    if (rightDown) ptx = Math.min(RR - PW / 2, ptx + 5);
+    px += (ptx - px) * 0.18;
 
-    if (lHeld) ptx = Math.max(RL + CW / 2 + 3, ptx - 5.5);
-    if (rHeld) ptx = Math.min(RR - CW / 2 - 3, ptx + 5.5);
-    px += (ptx - px) * 0.16;   // drift easing
+    // spawn
+    const interval = Math.max(22, 60 - frame * 0.035);
+    if (frame % Math.floor(interval) === 0) spawn();
 
-    if (ghostT > 0) ghostT--;
-    if (shakeT > 0) shakeT--;
+    // move traffic
+    for (const t of traffic) t.y += t.vy;
+    traffic = traffic.filter(t => t.y < H + 60);
 
-    for (const p of particles) { p.x += p.vx; p.y += p.vy; p.vx *= 0.91; p.vy *= 0.91; p.life -= 0.034; }
-    particles = particles.filter(p => p.life > 0);
-
-    for (const p of popups) { p.y -= 0.9; p.life -= 0.022; }
-    popups = popups.filter(p => p.life > 0);
-
-    const rate = Math.max(24, 62 - frame * 0.04);
-    if (frame % Math.floor(rate) === 0) spawnCar();
-    if (frame % 300 === 160)            spawnPowerup();
-
-    for (const t of traffic)  t.y += t.spd;
-    traffic  = traffic.filter(t => t.y < H + 80);
-    for (const p of powerups) p.y += spd;
-    powerups = powerups.filter(p => p.y < H + 40);
-
-    // Collision: player vs traffic
-    if (ghostT <= 0) {
-      for (const t of traffic) {
-        if (Math.abs(t.x - px) < (CW / 2 + t.w / 2 - 5) &&
-            Math.abs(t.y - PY) < (CH / 2 + t.h / 2 - 5)) {
-          gameover(); return;
-        }
-      }
-    }
-
-    // Powerup collection
-    for (let i = powerups.length - 1; i >= 0; i--) {
-      const p = powerups[i];
-      if (Math.abs(p.x - px) < 38 && Math.abs(p.y - PY) < 52) {
-        if (p.type === 'GHOST') {
-          ghostT = 200;
-          popups.push({ text: 'GHOST', x: px, y: PY - 36, life: 1.0, color: CYAN });
-        } else {
-          for (const t of traffic) burst(t.x, t.y, t.color, 8);
-          traffic = [];
-          shakeT  = 10;
-          popups.push({ text: 'CLEAR!', x: W / 2, y: H / 2 - 60, life: 1.2, color: PINK });
-        }
-        powerups.splice(i, 1);
+    // collision
+    for (const t of traffic) {
+      if (Math.abs(t.x - px)  < (PW / 2 + t.w / 2 - 4) &&
+          Math.abs(t.y - PY)  < (PH / 2 + t.h / 2 - 4)) {
+        if (score > best) { best = Math.floor(score); localStorage.setItem('dz_best', best); }
+        mode = 'dead';
+        return;
       }
     }
   }
 
-  function gameover() {
-    mode = 'dead';
-    const sc = Math.floor(score);
-    if (sc > best) { best = sc; localStorage.setItem('driftzone_best', best); }
-    burst(px, PY, GREEN, 24);
-    burst(px, PY, PINK,  14);
-    shakeT = 18;
+  function drawCar(x, y, w, h, color) {
+    // glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur  = 14;
+    ctx.fillStyle   = color;
+    ctx.fillRect(x - w / 2, y - h / 2, w, h);
+    ctx.shadowBlur  = 0;
+    // windshield
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x - w / 2 + 3, y - h / 2 + 5, w - 6, h * 0.26);
   }
 
-  // ── Draw helpers ─────────────────────────────────────────────────────────────
-  function glow(color, blur, fn) { ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; fn(); ctx.restore(); }
-  function txt(s, x, y, color, size, align = 'center') {
-    ctx.fillStyle = color; ctx.font = `${size}px monospace`;
-    ctx.textAlign = align; ctx.textBaseline = 'middle';
-    ctx.fillText(s, x, y);
-  }
-  // roundRect polyfill (ctx.roundRect not available in all browsers)
-  function rRect(x, y, w, h, r) {
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y,     x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x,     y + h, r);
-    ctx.arcTo(x,     y + h, x,     y,     r);
-    ctx.arcTo(x,     y,     x + w, y,     r);
-    ctx.closePath();
-  }
+  function draw() {
+    // background
+    ctx.fillStyle = '#0a0a0f';
+    ctx.fillRect(0, 0, W, H);
 
-  // ── Draw: city sides ─────────────────────────────────────────────────────────
-  function drawSides() {
-    ctx.fillStyle = '#06060e';
-    ctx.fillRect(0,  0, RL,     H);
-    ctx.fillRect(RR, 0, W - RR, H);
+    // road surface
+    ctx.fillStyle = '#0d0d1a';
+    ctx.fillRect(RL, 0, RR - RL, H);
 
-    const scroll = roadOff;
-    for (const [arr, flip] of [[bLeft, true], [bRight, false]]) {
-      for (const b of arr) {
-        const ry0 = b.y + scroll - STRIP_H;
-        for (const ry of [ry0, ry0 + STRIP_H]) {
-          if (ry > H || ry + b.h < 0) continue;
-          const bx = flip ? RL - b.w : RR;
-          ctx.fillStyle = '#0e0e1c';
-          ctx.fillRect(bx, ry, b.w, b.h);
-          for (const w of b.wins) {
-            if (!w.lit) continue;
-            ctx.fillStyle = 'rgba(255,240,160,0.28)';
-            ctx.fillRect(bx + w.x, ry + w.y, 5, 7);
-          }
-        }
-      }
-    }
-
-    // Side edge glow
-    glow(GREEN, 10, () => {
-      ctx.strokeStyle = GREEN + '44';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(RL, 0); ctx.lineTo(RL, H); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(RR, 0); ctx.lineTo(RR, H); ctx.stroke();
-    });
-  }
-
-  // ── Draw: road ───────────────────────────────────────────────────────────────
-  function drawRoad() {
-    // Surface
-    ctx.fillStyle = '#0c0c18';
-    ctx.fillRect(RL, 0, RW, H);
-
-    // Lane dashes
+    // lane dashes
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.11)';
-    ctx.setLineDash([26, 26]);
-    ctx.lineDashOffset = -roadOff;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.setLineDash([22, 22]);
+    ctx.lineDashOffset = -dashOff;
     ctx.lineWidth = 2;
     for (let i = 1; i < 3; i++) {
-      ctx.beginPath(); ctx.moveTo(RL + LW * i, 0); ctx.lineTo(RL + LW * i, H); ctx.stroke();
+      const x = RL + LANE * i;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
     }
     ctx.restore();
 
-    // Speed streaks (when fast)
-    if (spd > 5.5) {
-      const a = Math.min(0.28, (spd - 5.5) / 9);
-      ctx.strokeStyle = `rgba(0,212,255,${a})`;
-      ctx.lineWidth = 1;
-      for (const sl of speedLines) {
-        const y = ((sl.off + roadOff * 2.2) % H);
-        ctx.beginPath(); ctx.moveTo(sl.x, y); ctx.lineTo(sl.x, y + sl.len); ctx.stroke();
-      }
+    // road edges
+    ctx.shadowColor = GREEN;
+    ctx.shadowBlur  = 10;
+    ctx.strokeStyle = GREEN + '88';
+    ctx.lineWidth   = 2;
+    ctx.beginPath(); ctx.moveTo(RL, 0); ctx.lineTo(RL, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(RR, 0); ctx.lineTo(RR, H); ctx.stroke();
+    ctx.shadowBlur  = 0;
+
+    // traffic
+    for (const t of traffic) drawCar(t.x, t.y, t.w, t.h, t.color);
+
+    // player
+    drawCar(px, PY, PW, PH, GREEN);
+    // player headlights
+    ctx.fillStyle = 'rgba(255,255,200,0.9)';
+    ctx.fillRect(px - PW / 2 + 2, PY - PH / 2 + 2, 7, 4);
+    ctx.fillRect(px + PW / 2 - 9, PY - PH / 2 + 2, 7, 4);
+    // taillights
+    ctx.shadowColor = PINK; ctx.shadowBlur = 8;
+    ctx.fillStyle = PINK;
+    ctx.fillRect(px - PW / 2 + 2, PY + PH / 2 - 6, 7, 4);
+    ctx.fillRect(px + PW / 2 - 9, PY + PH / 2 - 6, 7, 4);
+    ctx.shadowBlur = 0;
+
+    // score
+    ctx.shadowColor = GREEN; ctx.shadowBlur = 8;
+    ctx.fillStyle   = GREEN;
+    ctx.font        = '20px monospace';
+    ctx.textAlign   = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.floor(score).toString().padStart(6, '0'), W / 2, 24);
+    ctx.shadowBlur  = 0;
+    if (best > 0) {
+      ctx.fillStyle = GREEN + '44';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('best:' + best, W - 10, 24);
     }
 
-    // Edge neon lines
-    glow(GREEN, 14, () => {
-      ctx.strokeStyle = GREEN + '77';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(RL, 0); ctx.lineTo(RL, H); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(RR, 0); ctx.lineTo(RR, H); ctx.stroke();
-    });
-  }
-
-  // ── Draw: car ────────────────────────────────────────────────────────────────
-  function drawCar(x, y, w, h, color, isPlayer) {
-    const alpha = (isPlayer && ghostT > 0)
-      ? 0.45 + 0.45 * Math.sin(performance.now() * 0.022)
-      : 1;
-
-    glow(color, isPlayer ? 18 : 10, () => {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.globalAlpha = alpha;
-
-      // Body
-      ctx.fillStyle = isPlayer ? color : color + 'cc';
-      ctx.beginPath();
-      rRect(-w / 2, -h / 2, w, h, 3);
-      ctx.fill();
-
-      // Windshield
-      ctx.fillStyle = 'rgba(0,0,0,0.52)';
-      if (isPlayer) {
-        ctx.fillRect(-w / 2 + 3, -h / 2 + 5, w - 6, h * 0.26);
-      } else {
-        ctx.fillRect(-w / 2 + 3, h / 2 - h * 0.31, w - 6, h * 0.24);
-      }
-
-      if (isPlayer) {
-        // Headlights (front = top)
-        ctx.fillStyle = 'rgba(255,255,200,0.92)';
-        ctx.fillRect(-w / 2 + 2, -h / 2 + 2, 7, 4);
-        ctx.fillRect( w / 2 - 9, -h / 2 + 2, 7, 4);
-        // Taillights (rear = bottom)
-        glow(PINK, 8, () => {
-          ctx.fillStyle = PINK;
-          ctx.fillRect(-w / 2 + 2, h / 2 - 6, 7, 4);
-          ctx.fillRect( w / 2 - 9, h / 2 - 6, 7, 4);
-        });
-      } else {
-        // Traffic headlights face the player (bottom of their rect)
-        glow('#ffee44', 6, () => {
-          ctx.fillStyle = 'rgba(255,230,100,0.88)';
-          ctx.fillRect(-w / 2 + 2, h / 2 - 6, 7, 4);
-          ctx.fillRect( w / 2 - 9, h / 2 - 6, 7, 4);
-        });
-      }
-
-      ctx.globalAlpha = 1;
-      ctx.restore();
-    });
-  }
-
-  // ── Draw: powerup ────────────────────────────────────────────────────────────
-  function drawPowerup(p) {
-    const pulse = 0.72 + 0.28 * Math.sin(performance.now() * 0.006);
-    glow(p.color, 20 * pulse, () => {
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.globalAlpha = pulse;
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth   = 2;
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = i * Math.PI / 3 - Math.PI / 6;
-        if (i === 0) ctx.moveTo(Math.cos(a) * 16, Math.sin(a) * 16);
-        else         ctx.lineTo(Math.cos(a) * 16, Math.sin(a) * 16);
-      }
-      ctx.closePath(); ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle   = p.color;
-      ctx.font        = 'bold 8px monospace';
+    // tap buttons
+    for (const [bx, held, label] of [[10, leftDown, '◀'], [W - 80, rightDown, '▶']]) {
+      ctx.fillStyle   = held ? 'rgba(0,255,159,0.2)' : 'rgba(0,255,159,0.06)';
+      ctx.strokeStyle = held ? GREEN + '99' : GREEN + '33';
+      ctx.lineWidth   = 1;
+      ctx.fillRect(bx, H - 66, 70, 52);
+      ctx.strokeRect(bx, H - 66, 70, 52);
+      ctx.shadowColor = GREEN; ctx.shadowBlur = held ? 12 : 0;
+      ctx.fillStyle   = held ? GREEN : GREEN + '66';
+      ctx.font        = '22px monospace';
       ctx.textAlign   = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(p.type === 'GHOST' ? 'GH' : 'CLR', 0, 0);
-      ctx.restore();
-    });
-  }
-
-  // ── Draw: HUD ────────────────────────────────────────────────────────────────
-  function drawHUD() {
-    glow(GREEN, 8, () => txt(Math.floor(score).toString().padStart(6, '0'), W / 2, 24, GREEN, 20));
-    if (best > 0) txt('best:' + best, W - 10, 24, GREEN + '44', 10, 'right');
-
-    if (ghostT > 0) glow(CYAN, 12, () => txt(`GHOST ${Math.ceil(ghostT / 60)}s`, W / 2, 50, CYAN, 13));
-
-    // Speed bar (top-left)
-    const spdR = Math.min(1, (spd - 3.5) / 9);
-    const barColor = spd > 9 ? PINK : GREEN;
-    ctx.fillStyle = '#ffffff11'; ctx.fillRect(10, 36, 50, 4);
-    glow(barColor, 5, () => { ctx.fillStyle = barColor; ctx.fillRect(10, 36, spdR * 50, 4); });
-    txt('SPD', 10, 48, '#ffffff33', 8, 'left');
-  }
-
-  // ── Draw: tap buttons ────────────────────────────────────────────────────────
-  function drawButtons() {
-    const pv    = [...pointers.values()];
-    const lHeld = inputL || pv.includes('L');
-    const rHeld = inputR || pv.includes('R');
-    for (const [bx, held, label] of [[12, lHeld, '◀'], [W - 82, rHeld, '▶']]) {
-      ctx.fillStyle   = held ? 'rgba(0,255,159,0.22)' : 'rgba(0,255,159,0.07)';
-      ctx.strokeStyle = held ? GREEN + 'aa' : GREEN + '33';
-      ctx.lineWidth   = 1;
-      ctx.beginPath(); rRect(bx, H - 64, 70, 52, 8); ctx.fill(); ctx.stroke();
-      glow(GREEN, held ? 14 : 0, () => txt(label, bx + 35, H - 38, held ? GREEN : GREEN + '66', 22));
-    }
-  }
-
-  // ── Draw: overlay screens ────────────────────────────────────────────────────
-  function drawOverlay() {
-    ctx.fillStyle = 'rgba(10,10,15,0.80)';
-    ctx.fillRect(0, 0, W, H);
-
-    if (mode === 'start') {
-      glow(GREEN, 26, () => txt('DRIFT//ZONE', W / 2, H / 2 - 92, GREEN, 36));
-      txt('cyberpunk highway survival', W / 2, H / 2 - 38, '#ffffff55', 11);
-      txt('◀ tap left half    tap right half ▶', W / 2, H / 2 - 14, '#ffffff44', 11);
-      glow(CYAN,  8, () => txt('GH = ghost thru traffic  ·  CLR = blast road', W / 2, H / 2 + 14, CYAN + '88', 10));
-      glow(PINK, 14, () => txt('[ tap to start ]', W / 2, H / 2 + 78, PINK, 17));
-      if (best > 0) txt('best: ' + best, W / 2, H / 2 + 112, GREEN + '55', 11);
+      ctx.fillText(label, bx + 35, H - 40);
+      ctx.shadowBlur  = 0;
     }
 
-    if (mode === 'dead') {
-      glow(PINK, 26, () => txt('// CRASH //', W / 2, H / 2 - 90, PINK, 30));
-      txt('score  ' + Math.floor(score), W / 2, H / 2 - 28, GREEN,        24);
-      txt('best   ' + best,              W / 2, H / 2 + 14,  GREEN + '77', 16);
-      glow(GREEN, 12, () => txt('[ tap to retry ]', W / 2, H / 2 + 72, GREEN, 16));
-    }
-  }
+    // overlay
+    if (mode === 'start' || mode === 'dead') {
+      ctx.fillStyle = 'rgba(10,10,15,0.82)';
+      ctx.fillRect(0, 0, W, H);
 
-  // ── Draw: main ───────────────────────────────────────────────────────────────
-  function draw() {
-    ctx.save();
-    if (shakeT > 0) ctx.translate((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5);
-
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, W, H);
-
-    drawSides();
-    drawRoad();
-
-    for (const t of traffic)  drawCar(t.x, t.y, t.w, t.h, t.color, false);
-    for (const p of powerups) drawPowerup(p);
-
-    drawCar(px, PY, CW, CH, GREEN, true);
-
-    // Particles
-    for (const p of particles) {
-      ctx.globalAlpha = p.life;
-      ctx.fillStyle   = p.color;
-      ctx.fillRect(p.x - p.sz / 2, p.y - p.sz / 2, p.sz, p.sz);
-    }
-    ctx.globalAlpha = 1;
-
-    // Popups
-    for (const p of popups) {
-      ctx.globalAlpha  = p.life;
-      ctx.fillStyle    = p.color;
-      ctx.font         = 'bold 13px monospace';
-      ctx.textAlign    = 'center';
+      ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(p.text, p.x, p.y);
+
+      if (mode === 'start') {
+        ctx.shadowColor = GREEN; ctx.shadowBlur = 22;
+        ctx.fillStyle   = GREEN; ctx.font = '34px monospace';
+        ctx.fillText('DRIFT//ZONE', W / 2, H / 2 - 90);
+        ctx.shadowBlur  = 0;
+        ctx.fillStyle   = '#ffffff55'; ctx.font = '12px monospace';
+        ctx.fillText('dodge the traffic', W / 2, H / 2 - 40);
+        ctx.fillText('tap left / right to steer', W / 2, H / 2 - 16);
+        ctx.shadowColor = PINK; ctx.shadowBlur = 12;
+        ctx.fillStyle   = PINK; ctx.font = '16px monospace';
+        ctx.fillText('[ tap to start ]', W / 2, H / 2 + 70);
+        ctx.shadowBlur  = 0;
+        if (best > 0) { ctx.fillStyle = GREEN + '55'; ctx.font = '11px monospace'; ctx.fillText('best: ' + best, W / 2, H / 2 + 106); }
+      } else {
+        ctx.shadowColor = PINK; ctx.shadowBlur = 22;
+        ctx.fillStyle   = PINK; ctx.font = '28px monospace';
+        ctx.fillText('// CRASH //', W / 2, H / 2 - 80);
+        ctx.shadowBlur  = 0;
+        ctx.fillStyle   = GREEN; ctx.font = '22px monospace';
+        ctx.fillText('score  ' + Math.floor(score), W / 2, H / 2 - 24);
+        ctx.fillStyle   = GREEN + '77'; ctx.font = '15px monospace';
+        ctx.fillText('best   ' + best, W / 2, H / 2 + 14);
+        ctx.shadowColor = GREEN; ctx.shadowBlur = 10;
+        ctx.fillStyle   = GREEN; ctx.font = '15px monospace';
+        ctx.fillText('[ tap to retry ]', W / 2, H / 2 + 66);
+        ctx.shadowBlur  = 0;
+      }
     }
-    ctx.globalAlpha = 1;
-
-    // Vignette
-    const vg = ctx.createRadialGradient(W / 2, H / 2, W * 0.25, W / 2, H / 2, W * 0.88);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
-    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
-
-    // Scanlines
-    for (let y = 0; y < H; y += 4) { ctx.fillStyle = 'rgba(0,0,0,0.04)'; ctx.fillRect(0, y, W, 1); }
-
-    drawHUD();
-    drawButtons();
-
-    if (mode === 'start' || mode === 'dead') drawOverlay();
-
-    ctx.restore();
   }
 
-  // ── Loop ─────────────────────────────────────────────────────────────────────
-  function loop() { update(); draw(); requestAnimationFrame(loop); }
+  // start in 'start' mode so overlay shows immediately
+  mode    = 'start';
+  px      = W / 2;
+  ptx     = W / 2;
+  traffic = [];
+  score   = 0;
+  spd     = 3;
+  frame   = 0;
+  dashOff = 0;
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
   loop();
   </script>
 </body>
