@@ -3,306 +3,494 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>WIRE//EAT</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><rect x='4' y='14' width='24' height='4' fill='%2300ff9f'/><rect x='14' y='4' width='4' height='24' fill='%2300ff9f'/><rect x='12' y='12' width='8' height='8' fill='%23ff00c8'/></svg>">
+  <title>DRIFT//ZONE</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0a0f'/><rect x='13' y='4' width='6' height='24' rx='2' fill='%2300ff9f'/><polygon points='8,14 13,8 13,20' fill='%23ff00c8'/><polygon points='24,14 19,8 19,20' fill='%23ff00c8'/></svg>">
   <link rel="manifest" href="manifest-game6.json">
-  <link rel="apple-touch-icon" href="icon-game6.svg">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="WIRE//EAT">
+  <meta name="apple-mobile-web-app-title" content="DRIFT//ZONE">
   <meta name="theme-color" content="#0a0a0f">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #0a0a0f;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      overflow: hidden;
-    }
+    body { background: #0a0a0f; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
     canvas { display: block; touch-action: none; }
-    #back {
-      position: fixed;
-      top: 1rem;
-      left: 1rem;
-      color: #00ff9f55;
-      font-size: 0.75rem;
-      text-decoration: none;
-      letter-spacing: 0.15em;
-      font-family: monospace;
-      z-index: 10;
-    }
+    #back { position: fixed; top: 1rem; left: 1rem; color: #00ff9f55; font-size: 0.75rem; text-decoration: none; letter-spacing: 0.15em; font-family: monospace; z-index: 10; }
     #back:hover { color: #00ff9f; }
   </style>
 </head>
 <body>
   <a href="index.html" id="back">← back</a>
   <canvas id="c"></canvas>
-
   <script>
-    const canvas = document.getElementById('c');
-    const ctx = canvas.getContext('2d');
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
 
-    const W = 400, H = 600;
-    const GREEN = '#00ff9f';
-    const PINK  = '#ff00c8';
-    const BG    = '#0a0a0f';
+  const W = 400, H = 600;
+  const GREEN = '#00ff9f', PINK = '#ff00c8', CYAN = '#00d4ff', BG = '#0a0a0f';
 
-    const COLS = 20, ROWS = 28;
-    const CW = W / COLS;     // cell width  = 20
-    const CH = H / ROWS;     // cell height ≈ 21.4
+  let scale = 1;
+  function resize() {
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    canvas.width  = W;
+    canvas.height = H;
+    canvas.style.width  = W * scale + 'px';
+    canvas.style.height = H * scale + 'px';
+  }
+  resize();
+  window.addEventListener('resize', resize);
 
-    function resize() {
-      const s = Math.min(window.innerWidth / W, window.innerHeight / H);
-      canvas.width  = W;
-      canvas.height = H;
-      canvas.style.width  = W * s + 'px';
-      canvas.style.height = H * s + 'px';
-    }
-    resize();
-    window.addEventListener('resize', resize);
+  // ── Road layout ──────────────────────────────────────────────────────────────
+  const RL = 72, RR = 328, RW = RR - RL;   // road left/right edges, width = 256
+  const LW = RW / 3;                         // lane width ~85
+  const LC = [RL + LW * 0.5, RL + LW * 1.5, RL + LW * 2.5]; // lane centers
 
-    // ── State ────────────────────────────────────────────────────────────────
-    let mode = 'start'; // 'start' | 'play' | 'dead'
-    let score, best = 0;
-    let snake, dir, nextDir, food, particles, tickTimer, tickInterval;
+  // ── Car dimensions ───────────────────────────────────────────────────────────
+  const CW = 28, CH = 50;
+  const PY = H - 118;   // player y
 
-    function init() {
-      score        = 0;
-      tickTimer    = 0;
-      tickInterval = 120; // ms per step (starts moderate)
-      const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
-      snake = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
-      dir      = { x: 1, y: 0 };
-      nextDir  = { x: 1, y: 0 };
-      particles = [];
-      placeFood();
-    }
+  // ── Buildings (pre-generated, tiled) ─────────────────────────────────────────
+  const STRIP_H = H * 6;
+  const bLeft = [], bRight = [];
 
-    function placeFood() {
-      const occupied = new Set(snake.map(s => s.x + ',' + s.y));
-      let fx, fy;
-      do {
-        fx = Math.floor(Math.random() * COLS);
-        fy = Math.floor(Math.random() * ROWS);
-      } while (occupied.has(fx + ',' + fy));
-      food = { x: fx, y: fy, pulse: 0 };
-    }
-
-    // ── Particles ─────────────────────────────────────────────────────────────
-    function burst(px, py, color) {
-      for (let i = 0; i < 10; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const v = 1 + Math.random() * 3;
-        particles.push({ x: px, y: py, vx: Math.cos(a)*v, vy: Math.sin(a)*v,
-                         life: 1, color });
+  (function genBuildings() {
+    for (const arr of [bLeft, bRight]) {
+      let y = 0;
+      while (y < STRIP_H) {
+        const h = 45 + Math.random() * 130;
+        const w = 22 + Math.random() * 44;
+        const wins = [];
+        for (let wx = 4; wx < w - 4; wx += 9) {
+          for (let wy = 7; wy < h - 7; wy += 13) {
+            if (Math.random() < 0.5) wins.push({ x: wx, y: wy, lit: Math.random() < 0.7 });
+          }
+        }
+        arr.push({ y, h, w, wins });
+        y += h + 3 + Math.random() * 14;
       }
     }
+  })();
 
-    // ── Input ─────────────────────────────────────────────────────────────────
-    const DIRS = { ArrowUp:[0,-1], ArrowDown:[0,1], ArrowLeft:[-1,0], ArrowRight:[1,0],
-                   w:[0,-1], s:[0,1], a:[-1,0], d:[1,0] };
+  // ── Speed lines (stable x positions) ─────────────────────────────────────────
+  const speedLines = Array.from({ length: 10 }, () => ({
+    x:   RL + 12 + Math.random() * (RW - 24),
+    off: Math.random() * 60,
+    len: 18 + Math.random() * 38,
+  }));
 
-    document.addEventListener('keydown', e => {
-      if (mode === 'start' || mode === 'dead') { mode = 'play'; init(); return; }
-      const d = DIRS[e.key];
-      if (d && !(d[0] === -dir.x && d[1] === -dir.y)) {
-        nextDir = { x: d[0], y: d[1] };
-        e.preventDefault();
-      }
+  // ── State ────────────────────────────────────────────────────────────────────
+  let mode = 'start';
+  let px, ptx;
+  let traffic, particles, popups, powerups;
+  let score, spd, frame;
+  let roadOff;
+  let ghostT, shakeT;
+  const pointers = new Map();
+  let inputL = false, inputR = false;
+
+  let best = +(localStorage.getItem('driftzone_best') || 0);
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
+  function init() {
+    mode      = 'play';
+    px        = W / 2;
+    ptx       = W / 2;
+    traffic   = [];
+    particles = [];
+    popups    = [];
+    powerups  = [];
+    score     = 0;
+    spd       = 3.5;
+    frame     = 0;
+    roadOff   = 0;
+    ghostT    = 0;
+    shakeT    = 0;
+  }
+
+  // ── Spawning ─────────────────────────────────────────────────────────────────
+  const CAR_COLORS = [PINK, CYAN, '#ffee44', '#ff8822', '#cc44ff'];
+
+  function spawnCar() {
+    const lane  = Math.floor(Math.random() * 3);
+    const color = CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)];
+    traffic.push({
+      x: LC[lane], y: -65,
+      color,
+      w: CW - 2 + Math.random() * 10,
+      h: CH - 4 + Math.random() * 20,
+      spd: spd * (0.82 + Math.random() * 0.38),
     });
+  }
 
-    // Touch: swipe to steer
-    let touchStart = null;
-    canvas.addEventListener('pointerdown', e => {
-      e.preventDefault();
-      if (mode === 'start' || mode === 'dead') { mode = 'play'; init(); return; }
-      touchStart = { x: e.clientX, y: e.clientY };
-    });
-    canvas.addEventListener('pointerup', e => {
-      if (!touchStart) return;
-      const dx = e.clientX - touchStart.x;
-      const dy = e.clientY - touchStart.y;
-      touchStart = null;
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; // too small
-      let d;
-      if (Math.abs(dx) > Math.abs(dy)) d = dx > 0 ? [1,0] : [-1,0];
-      else                              d = dy > 0 ? [0,1] : [0,-1];
-      if (!(d[0] === -dir.x && d[1] === -dir.y))
-        nextDir = { x: d[0], y: d[1] };
-    });
+  function spawnPowerup() {
+    const lane = Math.floor(Math.random() * 3);
+    const type = Math.random() < 0.55 ? 'GHOST' : 'CLEAR';
+    powerups.push({ x: LC[lane], y: -32, type, color: type === 'GHOST' ? CYAN : PINK });
+  }
 
-    // ── Game tick ─────────────────────────────────────────────────────────────
-    let last = 0;
-    function tick() {
-      dir = nextDir;
-      const head = { x: (snake[0].x + dir.x + COLS) % COLS,
-                     y: (snake[0].y + dir.y + ROWS) % ROWS };
+  function burst(x, y, color, n = 10) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 4.5;
+      particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, color, sz: 2 + Math.random() * 2 });
+    }
+  }
 
-      // Self-collision
-      if (snake.some(s => s.x === head.x && s.y === head.y)) {
-        die(); return;
+  // ── Input ────────────────────────────────────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (mode !== 'play') { if (['Space','Enter'].includes(e.code)) { e.preventDefault(); init(); } return; }
+    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') { e.preventDefault(); inputL = true; }
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') { e.preventDefault(); inputR = true; }
+  });
+  document.addEventListener('keyup', e => {
+    if (e.code === 'ArrowLeft'  || e.code === 'KeyA') inputL = false;
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') inputR = false;
+  });
+
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (mode !== 'play') { init(); return; }
+    const r = canvas.getBoundingClientRect();
+    pointers.set(e.pointerId, (e.clientX - r.left) / scale < W / 2 ? 'L' : 'R');
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!pointers.has(e.pointerId)) return;
+    const r = canvas.getBoundingClientRect();
+    pointers.set(e.pointerId, (e.clientX - r.left) / scale < W / 2 ? 'L' : 'R');
+  });
+  canvas.addEventListener('pointerup',     e => { e.preventDefault(); pointers.delete(e.pointerId); });
+  canvas.addEventListener('pointercancel', e => { e.preventDefault(); pointers.delete(e.pointerId); });
+
+  // ── Update ───────────────────────────────────────────────────────────────────
+  function update() {
+    if (mode !== 'play') return;
+    frame++;
+    spd     = 3.5 + frame * 0.0013;
+    score  += spd * 0.08;
+    roadOff = (roadOff + spd) % 60;
+
+    const pv   = [...pointers.values()];
+    const lHeld = inputL || pv.includes('L');
+    const rHeld = inputR || pv.includes('R');
+
+    if (lHeld) ptx = Math.max(RL + CW / 2 + 3, ptx - 5.5);
+    if (rHeld) ptx = Math.min(RR - CW / 2 - 3, ptx + 5.5);
+    px += (ptx - px) * 0.16;   // drift easing
+
+    if (ghostT > 0) ghostT--;
+    if (shakeT > 0) shakeT--;
+
+    for (const p of particles) { p.x += p.vx; p.y += p.vy; p.vx *= 0.91; p.vy *= 0.91; p.life -= 0.034; }
+    particles = particles.filter(p => p.life > 0);
+
+    for (const p of popups) { p.y -= 0.9; p.life -= 0.022; }
+    popups = popups.filter(p => p.life > 0);
+
+    const rate = Math.max(24, 62 - frame * 0.04);
+    if (frame % Math.floor(rate) === 0) spawnCar();
+    if (frame % 300 === 160)            spawnPowerup();
+
+    for (const t of traffic)  t.y += t.spd;
+    traffic  = traffic.filter(t => t.y < H + 80);
+    for (const p of powerups) p.y += spd;
+    powerups = powerups.filter(p => p.y < H + 40);
+
+    // Collision: player vs traffic
+    if (ghostT <= 0) {
+      for (const t of traffic) {
+        if (Math.abs(t.x - px) < (CW / 2 + t.w / 2 - 5) &&
+            Math.abs(t.y - PY) < (CH / 2 + t.h / 2 - 5)) {
+          gameover(); return;
+        }
       }
+    }
 
-      const ate = head.x === food.x && head.y === food.y;
-      snake.unshift(head);
-      if (ate) {
-        score++;
-        burst(food.x * CW + CW/2, food.y * CH + CH/2, PINK);
-        placeFood();
-        // Speed up slightly every 5 points
-        tickInterval = Math.max(55, 120 - Math.floor(score / 5) * 8);
-      } else {
-        snake.pop();
+    // Powerup collection
+    for (let i = powerups.length - 1; i >= 0; i--) {
+      const p = powerups[i];
+      if (Math.abs(p.x - px) < 38 && Math.abs(p.y - PY) < 52) {
+        if (p.type === 'GHOST') {
+          ghostT = 200;
+          popups.push({ text: 'GHOST', x: px, y: PY - 36, life: 1.0, color: CYAN });
+        } else {
+          for (const t of traffic) burst(t.x, t.y, t.color, 8);
+          traffic = [];
+          shakeT  = 10;
+          popups.push({ text: 'CLEAR!', x: W / 2, y: H / 2 - 60, life: 1.2, color: PINK });
+        }
+        powerups.splice(i, 1);
+      }
+    }
+  }
+
+  function gameover() {
+    mode = 'dead';
+    const sc = Math.floor(score);
+    if (sc > best) { best = sc; localStorage.setItem('driftzone_best', best); }
+    burst(px, PY, GREEN, 24);
+    burst(px, PY, PINK,  14);
+    shakeT = 18;
+  }
+
+  // ── Draw helpers ─────────────────────────────────────────────────────────────
+  function glow(color, blur, fn) { ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; fn(); ctx.restore(); }
+  function txt(s, x, y, color, size, align = 'center') {
+    ctx.fillStyle = color; ctx.font = `${size}px monospace`;
+    ctx.textAlign = align; ctx.textBaseline = 'middle';
+    ctx.fillText(s, x, y);
+  }
+
+  // ── Draw: city sides ─────────────────────────────────────────────────────────
+  function drawSides() {
+    ctx.fillStyle = '#06060e';
+    ctx.fillRect(0,  0, RL,     H);
+    ctx.fillRect(RR, 0, W - RR, H);
+
+    const scroll = roadOff;
+    for (const [arr, flip] of [[bLeft, true], [bRight, false]]) {
+      for (const b of arr) {
+        const ry0 = b.y + scroll - STRIP_H;
+        for (const ry of [ry0, ry0 + STRIP_H]) {
+          if (ry > H || ry + b.h < 0) continue;
+          const bx = flip ? RL - b.w : RR;
+          ctx.fillStyle = '#0e0e1c';
+          ctx.fillRect(bx, ry, b.w, b.h);
+          for (const w of b.wins) {
+            if (!w.lit) continue;
+            ctx.fillStyle = 'rgba(255,240,160,0.28)';
+            ctx.fillRect(bx + w.x, ry + w.y, 5, 7);
+          }
+        }
       }
     }
 
-    function die() {
-      mode = 'dead';
-      // burst along body
-      for (let i = 0; i < Math.min(snake.length, 8); i++) {
-        burst(snake[i].x * CW + CW/2, snake[i].y * CH + CH/2,
-              i % 2 === 0 ? PINK : GREEN);
-      }
-      if (score > best) best = score;
-    }
-
-    // ── Draw helpers ──────────────────────────────────────────────────────────
-    function glow(color, blur, fn) {
-      ctx.save();
-      ctx.shadowColor = color;
-      ctx.shadowBlur  = blur;
-      fn();
-      ctx.restore();
-    }
-
-    function text(str, x, y, color, size, align = 'center') {
-      ctx.fillStyle    = color;
-      ctx.font         = `${size}px monospace`;
-      ctx.textAlign    = align;
-      ctx.textBaseline = 'middle';
-      ctx.fillText(str, x, y);
-    }
-
-    // ── Draw ──────────────────────────────────────────────────────────────────
-    function draw(ts) {
-      // Background
-      ctx.fillStyle = BG;
-      ctx.fillRect(0, 0, W, H);
-
-      // Grid
-      ctx.strokeStyle = '#00ff9f08';
+    // Side edge glow
+    glow(GREEN, 10, () => {
+      ctx.strokeStyle = GREEN + '44';
       ctx.lineWidth = 1;
-      for (let c = 0; c <= COLS; c++) {
-        ctx.beginPath(); ctx.moveTo(c * CW, 0); ctx.lineTo(c * CW, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(RL, 0); ctx.lineTo(RL, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(RR, 0); ctx.lineTo(RR, H); ctx.stroke();
+    });
+  }
+
+  // ── Draw: road ───────────────────────────────────────────────────────────────
+  function drawRoad() {
+    // Surface
+    ctx.fillStyle = '#0c0c18';
+    ctx.fillRect(RL, 0, RW, H);
+
+    // Lane dashes
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.11)';
+    ctx.setLineDash([26, 26]);
+    ctx.lineDashOffset = -roadOff;
+    ctx.lineWidth = 2;
+    for (let i = 1; i < 3; i++) {
+      ctx.beginPath(); ctx.moveTo(RL + LW * i, 0); ctx.lineTo(RL + LW * i, H); ctx.stroke();
+    }
+    ctx.restore();
+
+    // Speed streaks (when fast)
+    if (spd > 5.5) {
+      const a = Math.min(0.28, (spd - 5.5) / 9);
+      ctx.strokeStyle = `rgba(0,212,255,${a})`;
+      ctx.lineWidth = 1;
+      for (const sl of speedLines) {
+        const y = ((sl.off + roadOff * 2.2) % H);
+        ctx.beginPath(); ctx.moveTo(sl.x, y); ctx.lineTo(sl.x, y + sl.len); ctx.stroke();
       }
-      for (let r = 0; r <= ROWS; r++) {
-        ctx.beginPath(); ctx.moveTo(0, r * CH); ctx.lineTo(W, r * CH); ctx.stroke();
+    }
+
+    // Edge neon lines
+    glow(GREEN, 14, () => {
+      ctx.strokeStyle = GREEN + '77';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(RL, 0); ctx.lineTo(RL, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(RR, 0); ctx.lineTo(RR, H); ctx.stroke();
+    });
+  }
+
+  // ── Draw: car ────────────────────────────────────────────────────────────────
+  function drawCar(x, y, w, h, color, isPlayer) {
+    const alpha = (isPlayer && ghostT > 0)
+      ? 0.45 + 0.45 * Math.sin(performance.now() * 0.022)
+      : 1;
+
+    glow(color, isPlayer ? 18 : 10, () => {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.globalAlpha = alpha;
+
+      // Body
+      ctx.fillStyle = isPlayer ? color : color + 'cc';
+      ctx.beginPath();
+      ctx.roundRect(-w / 2, -h / 2, w, h, 3);
+      ctx.fill();
+
+      // Windshield
+      ctx.fillStyle = 'rgba(0,0,0,0.52)';
+      if (isPlayer) {
+        ctx.fillRect(-w / 2 + 3, -h / 2 + 5, w - 6, h * 0.26);
+      } else {
+        ctx.fillRect(-w / 2 + 3, h / 2 - h * 0.31, w - 6, h * 0.24);
       }
 
-      // Scanlines
-      for (let y = 0; y < H; y += 4) {
-        ctx.fillStyle = 'rgba(0,0,0,0.10)';
-        ctx.fillRect(0, y, W, 1);
-      }
-
-      if (mode === 'start') { drawOverlay(); return; }
-
-      // Food (pulsing)
-      food.pulse = (food.pulse + 0.07) % (Math.PI * 2);
-      const fp = 0.55 + 0.2 * Math.sin(food.pulse);
-      glow(PINK, 18, () => {
-        ctx.fillStyle = PINK;
-        const fw = CW * fp, fh = CH * fp;
-        ctx.fillRect(food.x * CW + (CW - fw) / 2,
-                     food.y * CH + (CH - fh) / 2, fw, fh);
-      });
-
-      // Snake
-      for (let i = 0; i < snake.length; i++) {
-        const s = snake[i];
-        const t = 1 - i / snake.length;
-        const color = i === 0 ? GREEN : `rgba(0,${Math.floor(180 + 75*t)},${Math.floor(120*t)},${0.4 + 0.6*t})`;
-        glow(GREEN, i === 0 ? 14 : 0, () => {
-          ctx.fillStyle = color;
-          const pad = i === 0 ? 1 : 2;
-          ctx.fillRect(s.x * CW + pad, s.y * CH + pad, CW - pad*2, CH - pad*2);
+      if (isPlayer) {
+        // Headlights (front = top)
+        ctx.fillStyle = 'rgba(255,255,200,0.92)';
+        ctx.fillRect(-w / 2 + 2, -h / 2 + 2, 7, 4);
+        ctx.fillRect( w / 2 - 9, -h / 2 + 2, 7, 4);
+        // Taillights (rear = bottom)
+        glow(PINK, 8, () => {
+          ctx.fillStyle = PINK;
+          ctx.fillRect(-w / 2 + 2, h / 2 - 6, 7, 4);
+          ctx.fillRect( w / 2 - 9, h / 2 - 6, 7, 4);
         });
-        // Head details
-        if (i === 0) {
-          ctx.fillStyle = BG;
-          const ex = dir.x, ey = dir.y;
-          const e1x = dir.y !== 0 ? -3 : 0, e1y = dir.x !== 0 ? -3 : 0;
-          const ox = s.x * CW + CW/2 + ex * 4, oy = s.y * CH + CH/2 + ey * 4;
-          ctx.beginPath(); ctx.arc(ox + e1x, oy + e1y, 2.5, 0, Math.PI*2); ctx.fill();
-          ctx.beginPath(); ctx.arc(ox - e1x, oy - e1y, 2.5, 0, Math.PI*2); ctx.fill();
-        }
+      } else {
+        // Traffic headlights face the player (bottom of their rect)
+        glow('#ffee44', 6, () => {
+          ctx.fillStyle = 'rgba(255,230,100,0.88)';
+          ctx.fillRect(-w / 2 + 2, h / 2 - 6, 7, 4);
+          ctx.fillRect( w / 2 - 9, h / 2 - 6, 7, 4);
+        });
       }
 
-      // Particles
-      for (const p of particles) {
-        ctx.globalAlpha = p.life;
-        ctx.fillStyle = p.color;
-        ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
-      }
       ctx.globalAlpha = 1;
+      ctx.restore();
+    });
+  }
 
-      // Score
-      glow(GREEN, 10, () => {
-        text(String(score).padStart(4, '0'), 20, 28, GREEN, 22, 'left');
-      });
-      if (best > 0) {
-        text('best ' + best, W - 16, 28, '#00ff9f55', 14, 'right');
+  // ── Draw: powerup ────────────────────────────────────────────────────────────
+  function drawPowerup(p) {
+    const pulse = 0.72 + 0.28 * Math.sin(performance.now() * 0.006);
+    glow(p.color, 20 * pulse, () => {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth   = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3 - Math.PI / 6;
+        if (i === 0) ctx.moveTo(Math.cos(a) * 16, Math.sin(a) * 16);
+        else         ctx.lineTo(Math.cos(a) * 16, Math.sin(a) * 16);
       }
+      ctx.closePath(); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle   = p.color;
+      ctx.font        = 'bold 8px monospace';
+      ctx.textAlign   = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.type === 'GHOST' ? 'GH' : 'CLR', 0, 0);
+      ctx.restore();
+    });
+  }
 
-      if (mode === 'dead') drawOverlay();
+  // ── Draw: HUD ────────────────────────────────────────────────────────────────
+  function drawHUD() {
+    glow(GREEN, 8, () => txt(Math.floor(score).toString().padStart(6, '0'), W / 2, 24, GREEN, 20));
+    if (best > 0) txt('best:' + best, W - 10, 24, GREEN + '44', 10, 'right');
+
+    if (ghostT > 0) glow(CYAN, 12, () => txt(`GHOST ${Math.ceil(ghostT / 60)}s`, W / 2, 50, CYAN, 13));
+
+    // Speed bar (top-left)
+    const spdR = Math.min(1, (spd - 3.5) / 9);
+    const barColor = spd > 9 ? PINK : GREEN;
+    ctx.fillStyle = '#ffffff11'; ctx.fillRect(10, 36, 50, 4);
+    glow(barColor, 5, () => { ctx.fillStyle = barColor; ctx.fillRect(10, 36, spdR * 50, 4); });
+    txt('SPD', 10, 48, '#ffffff33', 8, 'left');
+  }
+
+  // ── Draw: tap buttons ────────────────────────────────────────────────────────
+  function drawButtons() {
+    const pv    = [...pointers.values()];
+    const lHeld = inputL || pv.includes('L');
+    const rHeld = inputR || pv.includes('R');
+    for (const [bx, held, label] of [[12, lHeld, '◀'], [W - 82, rHeld, '▶']]) {
+      ctx.fillStyle   = held ? 'rgba(0,255,159,0.22)' : 'rgba(0,255,159,0.07)';
+      ctx.strokeStyle = held ? GREEN + 'aa' : GREEN + '33';
+      ctx.lineWidth   = 1;
+      ctx.beginPath(); ctx.roundRect(bx, H - 64, 70, 52, 8); ctx.fill(); ctx.stroke();
+      glow(GREEN, held ? 14 : 0, () => txt(label, bx + 35, H - 38, held ? GREEN : GREEN + '66', 22));
+    }
+  }
+
+  // ── Draw: overlay screens ────────────────────────────────────────────────────
+  function drawOverlay() {
+    ctx.fillStyle = 'rgba(10,10,15,0.80)';
+    ctx.fillRect(0, 0, W, H);
+
+    if (mode === 'start') {
+      glow(GREEN, 26, () => txt('DRIFT//ZONE', W / 2, H / 2 - 92, GREEN, 36));
+      txt('cyberpunk highway survival', W / 2, H / 2 - 38, '#ffffff55', 11);
+      txt('◀ tap left half    tap right half ▶', W / 2, H / 2 - 14, '#ffffff44', 11);
+      glow(CYAN,  8, () => txt('GH = ghost thru traffic  ·  CLR = blast road', W / 2, H / 2 + 14, CYAN + '88', 10));
+      glow(PINK, 14, () => txt('[ tap to start ]', W / 2, H / 2 + 78, PINK, 17));
+      if (best > 0) txt('best: ' + best, W / 2, H / 2 + 112, GREEN + '55', 11);
     }
 
-    function drawOverlay() {
-      ctx.fillStyle = 'rgba(10,10,15,0.72)';
-      ctx.fillRect(0, 0, W, H);
-
-      if (mode === 'start') {
-        glow(GREEN, 20, () => text('WIRE//EAT', W/2, H/2 - 70, GREEN, 30));
-        text('eat the data nodes', W/2, H/2 - 10, '#ffffff99', 13);
-        text('arrow keys  /  swipe to steer', W/2, H/2 + 16, '#ffffff44', 11);
-        text('walls wrap — tail does not', W/2, H/2 + 36, '#ffffff33', 11);
-        glow(PINK, 10, () => text('[ tap to start ]', W/2, H/2 + 80, PINK, 14));
-      }
-
-      if (mode === 'dead') {
-        glow(PINK, 20, () => text('// dead //', W/2, H/2 - 60, PINK, 26));
-        text('score  ' + score, W/2, H/2 - 8, GREEN, 18);
-        text('best   ' + best,  W/2, H/2 + 20, '#00ff9f88', 16);
-        glow(GREEN, 10, () => text('[ tap to retry ]', W/2, H/2 + 66, GREEN, 14));
-      }
+    if (mode === 'dead') {
+      glow(PINK, 26, () => txt('// CRASH //', W / 2, H / 2 - 90, PINK, 30));
+      txt('score  ' + Math.floor(score), W / 2, H / 2 - 28, GREEN,        24);
+      txt('best   ' + best,              W / 2, H / 2 + 14,  GREEN + '77', 16);
+      glow(GREEN, 12, () => txt('[ tap to retry ]', W / 2, H / 2 + 72, GREEN, 16));
     }
+  }
 
-    // ── Loop ─────────────────────────────────────────────────────────────────
-    function loop(ts) {
-      if (mode === 'play') {
-        const dt = ts - last;
-        tickTimer += dt;
-        if (tickTimer >= tickInterval) {
-          tickTimer -= tickInterval;
-          tick();
-        }
-        // Update particles
-        for (const p of particles) {
-          p.x += p.vx; p.y += p.vy;
-          p.vx *= 0.9; p.vy *= 0.9;
-          p.life -= 0.04;
-        }
-        particles = particles.filter(p => p.life > 0);
-      }
-      last = ts;
-      draw(ts);
-      requestAnimationFrame(loop);
+  // ── Draw: main ───────────────────────────────────────────────────────────────
+  function draw() {
+    ctx.save();
+    if (shakeT > 0) ctx.translate((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5);
+
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    drawSides();
+    drawRoad();
+
+    for (const t of traffic)  drawCar(t.x, t.y, t.w, t.h, t.color, false);
+    for (const p of powerups) drawPowerup(p);
+
+    drawCar(px, PY, CW, CH, GREEN, true);
+
+    // Particles
+    for (const p of particles) {
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle   = p.color;
+      ctx.fillRect(p.x - p.sz / 2, p.y - p.sz / 2, p.sz, p.sz);
     }
+    ctx.globalAlpha = 1;
 
-    init();
-    requestAnimationFrame(loop);
+    // Popups
+    for (const p of popups) {
+      ctx.globalAlpha  = p.life;
+      ctx.fillStyle    = p.color;
+      ctx.font         = 'bold 13px monospace';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+
+    // Vignette
+    const vg = ctx.createRadialGradient(W / 2, H / 2, W * 0.25, W / 2, H / 2, W * 0.88);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+    // Scanlines
+    for (let y = 0; y < H; y += 4) { ctx.fillStyle = 'rgba(0,0,0,0.04)'; ctx.fillRect(0, y, W, 1); }
+
+    drawHUD();
+    drawButtons();
+
+    if (mode === 'start' || mode === 'dead') drawOverlay();
+
+    ctx.restore();
+  }
+
+  // ── Loop ─────────────────────────────────────────────────────────────────────
+  function loop() { update(); draw(); requestAnimationFrame(loop); }
+  loop();
   </script>
 </body>
 </html>

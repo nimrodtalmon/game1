@@ -1,10 +1,10 @@
 {
-  "name": "WIRE//EAT",
-  "short_name": "WIRE//EAT",
-  "start_url": "https://nimrodtalmon.github.io/game1/game6.html",
-  "scope": "https://nimrodtalmon.github.io/game1/",
+  "name": "DRIFT//ZONE",
+  "short_name": "DRIFT//ZONE",
+  "start_url": "/game1/game6.html",
   "display": "fullscreen",
+  "orientation": "portrait",
   "background_color": "#0a0a0f",
-  "theme_color": "#00ff9f",
+  "theme_color": "#0a0a0f",
   "icons": [{ "src": "icon-game6.svg", "sizes": "any", "type": "image/svg+xml" }]
 }
