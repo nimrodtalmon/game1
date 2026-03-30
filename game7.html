@@ -79,7 +79,7 @@
 
   // ── State ────────────────────────────────────────────────────────────────────
   let mode = 'start';
-  let px, ptx;
+  let px = W / 2, ptx = W / 2;
   let traffic, particles, popups, powerups;
   let score, spd, frame;
   let roadOff;
@@ -238,6 +238,15 @@
     ctx.textAlign = align; ctx.textBaseline = 'middle';
     ctx.fillText(s, x, y);
   }
+  // roundRect polyfill (ctx.roundRect not available in all browsers)
+  function rRect(x, y, w, h, r) {
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y,     x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x,     y + h, r);
+    ctx.arcTo(x,     y + h, x,     y,     r);
+    ctx.arcTo(x,     y,     x + w, y,     r);
+    ctx.closePath();
+  }
 
   // ── Draw: city sides ─────────────────────────────────────────────────────────
   function drawSides() {
@@ -323,7 +332,7 @@
       // Body
       ctx.fillStyle = isPlayer ? color : color + 'cc';
       ctx.beginPath();
-      ctx.roundRect(-w / 2, -h / 2, w, h, 3);
+      rRect(-w / 2, -h / 2, w, h, 3);
       ctx.fill();
 
       // Windshield
@@ -409,7 +418,7 @@
       ctx.fillStyle   = held ? 'rgba(0,255,159,0.22)' : 'rgba(0,255,159,0.07)';
       ctx.strokeStyle = held ? GREEN + 'aa' : GREEN + '33';
       ctx.lineWidth   = 1;
-      ctx.beginPath(); ctx.roundRect(bx, H - 64, 70, 52, 8); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); rRect(bx, H - 64, 70, 52, 8); ctx.fill(); ctx.stroke();
       glow(GREEN, held ? 14 : 0, () => txt(label, bx + 35, H - 38, held ? GREEN : GREEN + '66', 22));
     }
   }
